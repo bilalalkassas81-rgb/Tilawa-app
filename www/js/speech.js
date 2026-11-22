@@ -28,23 +28,38 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
       if (r.speechRecognition !== 'granted') throw Object.assign(new Error('Microphone permission was denied.'), { code: 'not_granted' });
     }
     await NativeSR.removeAllListeners();
-    NativeSR.addListener('partialResults', (d) => { lastPartial = (d.matches && d.matches[0]) || ''; onPartial(lastPartial); });
-    NativeSR.addListener('listeningState', (d) => {
-      if (d.status === 'stopped') {
-        if (lastPartial) { onFinal(lastPartial); lastPartial = ''; onPartial(''); }
-        if (want) setTimeout(() => want && loopNative(), 150); else set('idle');
-      }
+    // Android's recogniser hears one phrase at a time. It reports "stopped" at the end of speech and only
+    // then delivers the final text; on silence it ends with an error and sends no event at all.
+    // So: wait for the final text before restarting, and a watchdog restarts it whenever it has gone quiet.
+    NativeSR.addListener('partialResults', (d) => {
+      const t = (d.matches && d.matches[0]) || '';
+      if (!t || t === lastCommitted) return; // the final copy of a phrase already committed
+      lastPartial = t; onPartial(t);
     });
-    await loopNative();
+    NativeSR.addListener('listeningState', (d) => {
+      if (d.status === 'started') set('listening');
+      if (d.status === 'stopped' && want) scheduleRestart(900);
+    });
+    await beginNative();
+    watchdog = setInterval(async () => {
+      if (!want || restarting) return;
+      const r = await NativeSR.isListening().catch(() => ({ listening: false }));
+      if (!r.listening) scheduleRestart(0);
+    }, 1500);
   }
-  async function loopNative() {
+  let watchdog = 0, restarting = false, lastCommitted = '';
+  function commitNative() {
+    if (lastPartial) { lastCommitted = lastPartial; onFinal(lastPartial); lastPartial = ''; onPartial(''); }
+  }
+  function scheduleRestart(delay) {
+    if (restarting) return; restarting = true;
+    setTimeout(async () => { commitNative(); if (want) await beginNative(); restarting = false; }, delay);
+  }
+  async function beginNative() {
     try {
-      set('listening');
       await NativeSR.start({ language: lang, maxResults: 1, partialResults: true, popup: false });
-    } catch (e) {
-      // Android ends a session on silence with an error; keep listening if the reciter still wants to.
-      if (want) setTimeout(() => want && loopNative(), 400); else set('idle');
-    }
+      set('listening');
+    } catch (e) { /* busy or no speech: the watchdog tries again */ }
   }
 
   function startWeb() {
@@ -108,7 +123,12 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
     async stop() {
       want = false;
       if (speechSupport === 'dictation') { set('finishing'); await dictation.stop().catch(() => {}); return; }
-      if (speechSupport === 'native') { await NativeSR.stop().catch(() => {}); if (lastPartial) { onFinal(lastPartial); lastPartial = ''; } set('idle'); }
+      if (speechSupport === 'native') {
+        clearInterval(watchdog); set('finishing');
+        await NativeSR.stop().catch(() => {});
+        await new Promise((r) => setTimeout(r, 700)); // let the last phrase arrive
+        commitNative(); set('idle');
+      }
       else if (rec) { set('finishing'); try { rec.stop(); } catch (_) { set('idle'); } }
     },
   };

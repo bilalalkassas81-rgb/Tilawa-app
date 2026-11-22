@@ -1,9 +1,9 @@
 import { normalize, tokens, buildUnits, align, findVerses } from './match.js';
 import { createRecognizer, speechSupport, speechReady, inClaude, isNative, startVoiceRecording } from './speech.js';
 import { db, save, today, logDaily, streak, exportJSON, importJSON, putRecording, getRecording, deleteRecording } from './store.js';
-import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr } from './meta.js';
+import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr, BASMALA } from './meta.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 function h(tag, attrs, ...kids) {
@@ -69,7 +69,7 @@ function go(name, push = true) {
   if (name === 'home') renderHome();
   if (name === 'progress') renderProgress();
   if (name === 'settings') renderSettings();
-  if (name === 'read' && !R.words.length && Q) openPassage(P.s, P.from, P.to);
+  if (name === 'read' && !R.words.length && Q) { if (P.page) openPage(P.page); else if (P.s) openPassage(P.s, P.from, P.to); else openPage(1); }
   window.scrollTo({ top: 0 });
 }
 $$('.nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
@@ -131,7 +131,7 @@ function renderHome() {
 }
 $('#h-continue').addEventListener('click', () => {
   const lr = db.lastRead;
-  if (lr) openVerse(lr.s, lr.v); else openPassage(1, 1, 7);
+  if (lr) openVerse(lr.s, lr.v); else openPage(1);
 });
 $('#h-khatm').addEventListener('click', () => {
   const nx = nextKhatmVerse(); if (nx < 0) return;
@@ -223,52 +223,85 @@ function showFinder(text) {
 }
 
 /* ======================= READER ======================= */
-const R = { s: 1, from: 1, to: 7, words: [], units: [], els: [], vEls: [], finals: [], partial: '', manualWrong: new Set(), hints: new Set(), peeks: new Set(), res: null, prev: [], started: 0, elapsed: 0, listening: false, mode: 'recite', recorder: null };
+// A passage is either one Mushaf page (R.page > 0) or a custom verse range in one surah (R.page = 0).
+const R = { page: 1, s: 1, from: 1, to: 7, verses: [], words: [], units: [], els: [], vEls: [], finals: [], partial: '', manualWrong: new Set(), hints: new Set(), peeks: new Set(), res: null, prev: [], started: 0, elapsed: 0, listening: false, mode: 'recite', recorder: null };
 let rec = null;
+let PAGES = [];   // [surah, verse] where each Madinah Mushaf page starts
+function pageOf(s, v) {
+  const g = gIndex(s, v); let lo = 0, hi = PAGES.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (gIndex(PAGES[mid][0], PAGES[mid][1]) <= g) lo = mid; else hi = mid - 1; }
+  return lo + 1;
+}
+function pageVerses(p) {
+  const a = gIndex(...PAGES[p - 1]); const b = p < PAGES.length ? gIndex(...PAGES[p]) : TOTAL_VERSES;
+  const out = []; for (let g = a; g < b; g++) { const { s, v } = fromGlobal(g); out.push([s, v]); } return out;
+}
 
-function openVerse(s, v) {
-  const N = Q[s - 1][4].length;
-  // whole surah for short ones, a page-sized window otherwise
-  if (N <= 60) openPassage(s, 1, N, v);
-  else { const from = Math.max(1, v); openPassage(s, from, Math.min(N, from + 19), v); }
+function openVerse(s, v) { openPage(pageOf(s, v), s, v); }
+function openPage(p, fs, fv) {
+  p = Math.min(Math.max(1, p | 0), PAGES.length);
+  R.page = p; R.verses = pageVerses(p);
+  [R.s, R.from] = R.verses[0]; R.to = R.verses.filter((x) => x[0] === R.s).pop()[1];
+  P.page = p; P.s = R.s; P.from = R.from; P.to = R.to; save();
+  showPassage(fs, fv);
 }
 function openPassage(s, from, to, focus) {
+  if (from == null && to == null) return openVerse(s, 1);
   const N = Q[s - 1][4].length;
-  R.s = s; R.from = Math.min(Math.max(1, from || 1), N); R.to = Math.min(Math.max(R.from, to || N), N);
-  if (R.to - R.from > 300) R.to = R.from + 300 - 1; // keep very long surahs smooth
-  Object.assign(P, { s: R.s, from: R.from, to: R.to }); save();
+  R.page = 0; R.s = s; R.from = Math.min(Math.max(1, from || 1), N); R.to = Math.min(Math.max(R.from, to || N), N);
+  if (R.to - R.from > 300) R.to = R.from + 299;
+  R.verses = []; for (let v = R.from; v <= R.to; v++) R.verses.push([s, v]);
+  P.page = 0; P.s = R.s; P.from = R.from; P.to = R.to; save();
+  showPassage(s, focus);
+}
+function showPassage(fs, fv) {
   if (screen !== 'read') go('read');
   stopRecite(); stopAudio();
-  renderPassage();
-  if (focus && focus > R.from) requestAnimationFrame(() => { const el = R.vEls[focus - R.from]; el && el.scrollIntoView({ block: 'center' }); });
-  db.lastRead = { s, v: focus || R.from, t: Date.now() }; save();
+  renderPassage().then(() => {
+    if (fv && R.page === 0 && fv > R.from) { const el = R.vEls.find((x) => +x.dataset.s === fs && +x.dataset.v === fv); el && el.scrollIntoView({ block: 'center' }); }
+    else window.scrollTo({ top: 0 });
+  });
+  const [ls, lv] = fv ? [fs, fv] : R.verses[0];
+  db.lastRead = { s: ls, v: lv, t: Date.now() }; save();
+}
+function surahHeader(s) {
+  const sur = Q[s - 1];
+  return h('div', { class: 'sh' },
+    h('div', { class: 'cartouche' }, h('div', { class: 'ar' }, 'سورة ' + sur[0]), h('div', { class: 'en' }, `${sur[2]} · ${sur[4].length} verses`)),
+    s !== 1 && s !== 9 ? h('div', { class: 'basmala' }, BASMALA) : null);
 }
 async function renderPassage() {
-  const sur = Q[R.s - 1], N = sur[4].length;
-  $('#r-name').textContent = `${R.s}. ${sur[1]}`;
-  $('#r-sub').textContent = `Verses ${R.from}–${R.to} of ${N} · Juz ${juzOf(R.s, R.from)}`;
-  $('#c-ar').textContent = 'سورة ' + sur[0];
-  $('#c-en').textContent = `${sur[2]} · ${sur[3] === 'm' ? 'Meccan' : 'Medinan'} · ${N} verses`;
-  $('#basmala').hidden = !(R.from === 1 && R.s !== 1 && R.s !== 9);
-  $('#r-prev').disabled = R.s === 1 && R.from === 1; $('#r-next').disabled = R.s === 114 && R.to === N;
+  const first = R.verses[0], last = R.verses[R.verses.length - 1];
+  const sur = Q[first[0] - 1];
+  const surahsHere = [...new Set(R.verses.map((x) => x[0]))];
+  $('#r-name').textContent = surahsHere.map((s) => Q[s - 1][1]).join(' · ');
+  $('#r-sub').textContent = R.page ? `Page ${R.page} of ${PAGES.length} · Juz ${juzOf(...first)}` : `Verses ${R.from}–${R.to} of ${sur[4].length} · Juz ${juzOf(...first)}`;
+  $('#pg-surah').textContent = surahsHere.map((s) => 'سورة ' + Q[s - 1][0]).join(' · ');
+  $('#pg-juz').textContent = 'الجزء ' + toAr(juzOf(...first));
+  $('#pg-num').textContent = R.page ? toAr(R.page) : `${toAr(R.from)}–${toAr(R.to)}`;
+  $('#r-prev').disabled = R.page ? R.page === 1 : (R.s === 1 && R.from === 1);
+  $('#r-next').disabled = R.page ? R.page === PAGES.length : (R.s === 114 && R.to === Q[113][4].length);
+  $('#t-range').textContent = R.page ? 'Verse range' : 'Back to pages';
   const tr = P.tr ? await getTr(P.trLang).catch(() => null) : null;
   const tl = P.translit ? await getTr('translit').catch(() => null) : null;
   const box = $('#mushaf'); box.textContent = '';
   box.classList.toggle('stacked', !!(P.tr || P.translit));
+  box.classList.toggle('jl', R.page > 2);
   R.words = []; R.vEls = [];
-  const bm = new Set(db.bookmarks.filter((b) => b.s === R.s).map((b) => b.v));
+  const bm = new Set(db.bookmarks.map((b) => b.s + ':' + b.v));
   const frag = document.createDocumentFragment();
-  for (let v = R.from; v <= R.to; v++) {
-    const vEl = h('div', { class: 'v', 'data-v': v });
+  for (const [s, v] of R.verses) {
+    if (v === 1) frag.append(surahHeader(s));
+    const vEl = h('div', { class: 'v', 'data-s': s, 'data-v': v });
     const ay = h('span', { class: 'ayah' });
-    sur[4][v - 1].forEach((t, j) => {
-      const i = R.words.length; R.words.push({ text: t, v, j });
+    Q[s - 1][4][v - 1].forEach((t, j) => {
+      const i = R.words.length; R.words.push({ text: t, s, v, j });
       ay.append(h('span', { class: 'w', 'data-i': i }, t), ' ');
     });
-    ay.append(h('button', { class: 'vm' + (bm.has(v) ? ' bm' : ''), 'data-v': v, 'aria-label': `Verse ${v} options` }, toAr(v)), ' ');
+    ay.append(h('button', { class: 'vm' + (bm.has(s + ':' + v) ? ' bm' : ''), 'data-s': s, 'data-v': v, 'aria-label': `Verse ${s}:${v} options` }, toAr(v)), ' ');
     vEl.append(ay);
-    if (tl) vEl.append(h('div', { class: 'tl', lang: 'en' }, tl[R.s - 1][v - 1]));
-    if (tr) vEl.append(h('div', { class: 'tr', dir: ['ur'].includes(P.trLang) ? 'rtl' : null }, h('b', null, `${R.s}:${v}`), tr[R.s - 1][v - 1]));
+    if (tl) vEl.append(h('div', { class: 'tl', lang: 'en' }, tl[s - 1][v - 1]));
+    if (tr) vEl.append(h('div', { class: 'tr', dir: P.trLang === 'ur' ? 'rtl' : null }, h('b', null, `${s}:${v}`), tr[s - 1][v - 1]));
     frag.append(vEl); R.vEls.push(vEl);
   }
   box.append(frag);
@@ -276,45 +309,107 @@ async function renderPassage() {
   R.units = buildUnits(R.words);
   resetSession();
   updatePlayerLabel();
+  fitPage();
 }
-$('#r-prev').addEventListener('click', () => {
-  if (R.from > 1) { const len = R.to - R.from + 1; openPassage(R.s, Math.max(1, R.from - len), R.from - 1); }
-  else if (R.s > 1) { const N = Q[R.s - 2][4].length; openPassage(R.s - 1, N <= 60 ? 1 : Math.max(1, N - 19), N); }
-});
-$('#r-next').addEventListener('click', nextPassage);
+
+/* Fit the page's text to the screen, like a printed Mushaf page. */
+function fitPage() {
+  const box = $('#mushaf');
+  const stacked = box.classList.contains('stacked');
+  if (!P.fit || stacked || screen !== 'read') { document.documentElement.style.setProperty('--qsize', P.size + 'px'); return; }
+  const page = $('#page');
+  const top = page.getBoundingClientRect().top + window.scrollY;
+  const dock = $('#dock').getBoundingClientRect();
+  const bottom = (dock.height ? dock.top : innerHeight) + window.scrollY - 10;
+  const chrome = page.offsetHeight - box.offsetHeight;
+  const avail = bottom - top - chrome;
+  if (avail < 150) { document.documentElement.style.setProperty('--qsize', P.size + 'px'); return; }
+  let lo = 13, hi = 44;
+  for (let k = 0; k < 9; k++) {
+    const mid = (lo + hi) / 2;
+    document.documentElement.style.setProperty('--qsize', mid + 'px');
+    if (box.scrollHeight <= avail) lo = mid; else hi = mid;
+  }
+  document.documentElement.style.setProperty('--qsize', Math.floor(lo * 10) / 10 + 'px');
+}
+let fitT = 0;
+addEventListener('resize', () => { clearTimeout(fitT); fitT = setTimeout(fitPage, 150); });
+document.fonts && document.fonts.ready.then(() => fitPage());
+
 function nextPassage() {
+  if (R.page) { if (R.page < PAGES.length) openPage(R.page + 1); return; }
   const N = Q[R.s - 1][4].length, len = R.to - R.from + 1;
   if (R.to < N) openPassage(R.s, R.to + 1, Math.min(N, R.to + len));
-  else if (R.s < 114) { const M = Q[R.s][4].length; openPassage(R.s + 1, 1, M <= 60 ? M : 20); }
+  else if (R.s < 114) openVerse(R.s + 1, 1);
 }
+function prevPassage() {
+  if (R.page) { if (R.page > 1) openPage(R.page - 1); return; }
+  const len = R.to - R.from + 1;
+  if (R.from > 1) openPassage(R.s, Math.max(1, R.from - len), R.from - 1);
+  else if (R.s > 1) openVerse(R.s - 1, Q[R.s - 2][4].length);
+}
+$('#r-prev').addEventListener('click', prevPassage);
+$('#r-next').addEventListener('click', nextPassage);
+// Swipe like turning Mushaf pages: swipe right for the next page, left for the previous one.
+let sx = 0, sy = 0, st = 0;
+$('#page').addEventListener('touchstart', (e) => { const t = e.touches[0]; sx = t.clientX; sy = t.clientY; st = Date.now(); }, { passive: true });
+$('#page').addEventListener('touchend', (e) => {
+  const t = e.changedTouches[0]; const dx = t.clientX - sx, dy = t.clientY - sy;
+  if (Date.now() - st > 700 || Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
+  if (rec && rec.active) return;
+  if (dx > 0) nextPassage(); else prevPassage();
+}, { passive: true });
+
 $('#r-title').addEventListener('click', () => {
-  const inp = h('input', { type: 'search', placeholder: 'Search surah', style: 'margin:12px 12px 0;width:calc(100% - 24px);padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--paper)' });
+  const inp = h('input', { type: 'search', placeholder: 'Search surah, or a page number', style: 'margin:12px 12px 0;width:calc(100% - 24px);padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--paper)' });
   const ul = h('ul', { class: 'list', style: 'margin:12px;border-radius:12px' });
-  const fill = () => { const q = inp.value.trim().toLowerCase(); ul.textContent = ''; Q.forEach((s, i) => { if (!q || String(i + 1) === q || s[1].toLowerCase().includes(q) || s[2].toLowerCase().includes(q)) ul.append(surahItem(i + 1, null, () => { closeDialog(); openPassage(i + 1); })); }); };
+  const fill = () => {
+    const q = inp.value.trim().toLowerCase(); ul.textContent = '';
+    if (/^\d+$/.test(q) && +q >= 1 && +q <= PAGES.length) ul.append(h('li', null, h('button', { class: 'item', onclick: () => { closeDialog(); openPage(+q); } }, h('span', { class: 'n' }, q), h('span', { class: 'nm' }, h('b', null, `Page ${q}`), h('small', null, Q[PAGES[+q - 1][0] - 1][1])), h('span'))));
+    Q.forEach((s, i) => { if (!q || String(i + 1) === q || s[1].toLowerCase().includes(q) || s[2].toLowerCase().includes(q)) ul.append(surahItem(i + 1, null, () => { closeDialog(); openVerse(i + 1, 1); })); });
+  };
   inp.addEventListener('input', fill); fill();
-  openDialog('Choose a surah', h('div', null, inp, ul));
+  openDialog('Go to', h('div', null, inp, ul));
 });
 $('#t-range').addEventListener('click', () => {
-  const N = Q[R.s - 1][4].length;
+  if (!R.page) { openVerse(R.s, R.from); return; }
+  const s = R.s, N = Q[s - 1][4].length;
   const f = h('input', { type: 'number', min: 1, max: N, value: R.from, inputmode: 'numeric', id: 'rg-from' });
   const t = h('input', { type: 'number', min: 1, max: N, value: R.to, inputmode: 'numeric', id: 'rg-to' });
-  openDialog('Verse range', h('div', { class: 'dlg-body' },
+  openDialog(`Verse range · ${Q[s - 1][1]}`, h('div', { class: 'dlg-body' },
     h('div', { class: 'row2' }, h('div', { class: 'field' }, h('label', { for: 'rg-from' }, 'From verse'), f), h('div', { class: 'field' }, h('label', { for: 'rg-to' }, `To verse (max ${N})`), t)),
     h('div', { class: 'actions' },
-      h('button', { class: 'btn', onclick: () => { closeDialog(); openPassage(R.s, 1, N); } }, 'Whole surah'),
-      h('button', { class: 'btn accent', onclick: () => { closeDialog(); openPassage(R.s, +f.value, +t.value); } }, 'Apply'))));
+      h('button', { class: 'btn', onclick: () => { closeDialog(); openPassage(s, 1, N); } }, 'Whole surah'),
+      h('button', { class: 'btn accent', onclick: () => { closeDialog(); openPassage(s, +f.value, +t.value); } }, 'Apply'))));
 });
 
-/* reading prefs */
+/* display options sheet */
 function applyPrefs() {
-  document.documentElement.style.setProperty('--qsize', P.size + 'px');
-  $('#t-tr').setAttribute('aria-pressed', !!P.tr); $('#t-tl').setAttribute('aria-pressed', !!P.translit); $('#t-hide').setAttribute('aria-pressed', !!P.hide);
+  if (!P.fit) document.documentElement.style.setProperty('--qsize', P.size + 'px');
+  $('#t-hide').setAttribute('aria-pressed', !!P.hide);
 }
-$('#t-tr').addEventListener('click', () => { P.tr = !P.tr; save(); applyPrefs(); keepState(renderPassage); });
-$('#t-tl').addEventListener('click', () => { P.translit = !P.translit; save(); applyPrefs(); keepState(renderPassage); });
+function pills(values, current, label, onPick) {
+  const wrap = h('div', { class: 'pills' });
+  values.forEach(([val, text]) => wrap.append(h('button', { 'aria-pressed': String(val === current), onclick: (e) => {
+    $$('button', wrap).forEach((b) => b.setAttribute('aria-pressed', 'false')); e.currentTarget.setAttribute('aria-pressed', 'true'); onPick(val);
+  } }, text)));
+  return h('div', { class: 'opt-group' }, h('div', { class: 'lbl' }, label), wrap);
+}
+$('#r-view').addEventListener('click', () => {
+  const size = h('input', { type: 'range', min: 18, max: 56, step: 1, value: P.size, id: 'v-size', disabled: P.fit && !P.tr && !P.translit ? true : null });
+  size.addEventListener('input', () => { P.size = +size.value; save(); document.documentElement.style.setProperty('--qsize', P.size + 'px'); });
+  const lang = h('select', { id: 'v-lang' }); LANGS.forEach(([c, n]) => lang.append(h('option', { value: c, selected: c === P.trLang }, n)));
+  lang.addEventListener('change', () => { P.trLang = lang.value; save(); if (P.tr) keepState(renderPassage); });
+  const body = h('div', { class: 'dlg-body' },
+    pills([[true, 'Fit the page'], [false, 'Choose size']], !!P.fit, 'Text size', (v) => { P.fit = v; save(); size.disabled = v && !P.tr && !P.translit; fitPage(); }),
+    h('div', { class: 'range-row' }, h('span', { class: 'small muted' }, 'A'), size, h('span', { style: 'font-size:20px' }, 'A')),
+    pills([[false, 'Mushaf page'], [true, 'With translation']], !!P.tr, 'Layout', (v) => { P.tr = v; save(); keepState(renderPassage); size.disabled = P.fit && !P.tr && !P.translit; }),
+    h('div', { class: 'field' }, h('label', { for: 'v-lang' }, 'Translation language'), lang),
+    pills([[false, 'Off'], [true, 'On']], !!P.translit, 'Transliteration', (v) => { P.translit = v; save(); keepState(renderPassage); }));
+  dlg.classList.add('sheet-dlg'); openDialog('Display', body);
+});
+dlg.addEventListener('close', () => dlg.classList.remove('sheet-dlg'));
 $('#t-hide').addEventListener('click', () => { P.hide = !P.hide; R.peeks.clear(); save(); applyPrefs(); update(true); });
-$('#t-smaller').addEventListener('click', () => { P.size = Math.max(20, P.size - 3); save(); applyPrefs(); });
-$('#t-bigger').addEventListener('click', () => { P.size = Math.min(60, P.size + 3); save(); applyPrefs(); });
 async function keepState(fn) {
   const keep = { finals: R.finals, manualWrong: R.manualWrong, hints: R.hints, elapsed: R.elapsed };
   await fn(); Object.assign(R, keep); update(true);
@@ -323,7 +418,7 @@ async function keepState(fn) {
 /* verse actions */
 $('#mushaf').addEventListener('click', (e) => {
   const vm = e.target.closest('.vm');
-  if (vm) return verseMenu(R.s, +vm.dataset.v);
+  if (vm) return verseMenu(+vm.dataset.s, +vm.dataset.v);
   const w = e.target.closest('.w');
   if (w && w.classList.contains('veil')) { const i = +w.dataset.i; R.peeks.add(i); R.hints.add(i); update(); }
 });
@@ -331,18 +426,20 @@ function verseMenu(s, v) {
   const bi = db.bookmarks.findIndex((b) => b.s === s && b.v === v);
   const txt = verseText(s, v);
   const item = (label, fn) => h('li', null, h('button', { onclick: () => { closeDialog(); fn(); } }, label));
+  dlg.classList.add('sheet-dlg');
   openDialog(`${Q[s - 1][1]} ${s}:${v}`, h('ul', { class: 'menu' },
-    item('Play from this verse', () => { setMode('listen'); playFrom(v); }),
-    item('Recite from this verse', () => { setMode('recite'); openPassage(s, v, Math.min(Q[s - 1][4].length, Math.max(R.to, v))); }),
+    item('Play from this verse', () => { setMode('listen'); playFrom(s, v); }),
+    item('Recite from this verse', () => { setMode('recite'); openPassage(s, v, Math.min(Q[s - 1][4].length, v + 9)); }),
     item(bi >= 0 ? 'Remove bookmark' : 'Bookmark', () => toggleBookmark(s, v)),
     item(bi >= 0 && db.bookmarks[bi].note ? 'Edit note' : 'Add a note', () => editNote(s, v)),
     item('Copy verse', () => copy(`${txt}\n— ${Q[s - 1][1]} ${s}:${v}`)),
     navigator.share ? item('Share', () => navigator.share({ text: `${txt}\n— Qur’an ${s}:${v}` }).catch(() => {})) : null));
 }
+const vmEl = (s, v) => $(`.vm[data-s="${s}"][data-v="${v}"]`);
 function toggleBookmark(s, v) {
   const i = db.bookmarks.findIndex((b) => b.s === s && b.v === v);
   if (i >= 0) db.bookmarks.splice(i, 1); else db.bookmarks.push({ s, v, t: Date.now(), note: '' });
-  save(); const el = $(`.vm[data-v="${v}"]`); el && el.classList.toggle('bm', i < 0);
+  save(); const el = vmEl(s, v); el && el.classList.toggle('bm', i < 0);
   toast(i >= 0 ? 'Bookmark removed' : 'Bookmarked');
 }
 function editNote(s, v) {
@@ -351,7 +448,7 @@ function editNote(s, v) {
   openDialog(`Note on ${s}:${v}`, h('div', { class: 'dlg-body' }, h('div', { class: 'field' }, h('label', { for: 'note-ta' }, 'Your note (saves a bookmark too)'), ta),
     h('button', { class: 'btn accent', onclick: () => {
       if (!b) { b = { s, v, t: Date.now(), note: '' }; db.bookmarks.push(b); }
-      b.note = ta.value.trim(); save(); closeDialog(); const el = $(`.vm[data-v="${v}"]`); el && el.classList.add('bm'); toast('Note saved');
+      b.note = ta.value.trim(); save(); closeDialog(); const el = vmEl(s, v); el && el.classList.add('bm'); toast('Note saved');
     } }, 'Save note')));
 }
 async function copy(text) {
@@ -365,8 +462,8 @@ function setMode(m) {
   R.mode = m;
   $$('#r-mode button').forEach((b) => b.setAttribute('aria-selected', b.dataset.m === m));
   $('#dock-recite').hidden = m !== 'recite'; $('#dock-listen').hidden = m !== 'listen';
-  $('#legend').hidden = m !== 'recite';
   if (m === 'listen') stopRecite(); else stopAudio();
+  requestAnimationFrame(fitPage);
 }
 
 /* ======================= RECITE SESSION ======================= */
@@ -401,19 +498,20 @@ function update(force) {
   if (said || R.partial) { heard.append(said + ' '); if (R.partial) heard.append(h('i', null, R.partial)); }
   else heard.append(h('span', { class: 'note' }, micNote()));
   $('#b-finish').disabled = !R.finals.length;
-  $('#b-reveal').disabled = res.finished; $('#b-flag').disabled = res.finished;
+  $('#b-reveal').disabled = res.finished;
   if (res.finished && rec && rec.active) { rec.stop(); toast('Passage complete. Press Finish to see your results.'); }
   setState();
 }
 function micNote() {
   if (speechSupport === 'none') return 'Voice recitation needs Chrome, Safari or the Android app. You can still test yourself with Memorize and Reveal word.';
-  return `Tap the microphone and recite from verse ${R.from}. Tap a word marker to bookmark, play or share.`;
+  const [s, v] = R.verses[0] || [R.s, R.from];
+  return `Tap the mic and recite from ${s}:${v}`;
 }
 const fmt = (ms) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const elapsed = () => R.elapsed + (R.listening && R.started ? Date.now() - R.started : 0);
 function renderMeta() {
   const r = R.res; if (!r) return;
-  $('#meta').textContent = `${r.doneWords}/${R.words.length} words · ${r.mistakes} mistake${r.mistakes === 1 ? '' : 's'} · ${fmt(elapsed())}`;
+  $('#meta').textContent = `${r.doneWords}/${R.words.length} · ${r.mistakes} mistake${r.mistakes === 1 ? '' : 's'} · ${fmt(elapsed())}`;
 }
 setInterval(() => { if (R.listening) renderMeta(); }, 1000);
 function setState(s) {
@@ -453,8 +551,21 @@ function reveal() {
   update();
 }
 $('#b-reveal').addEventListener('click', reveal);
-$('#b-flag').addEventListener('click', () => { const r = R.res; if (!r || r.finished) return; R.manualWrong.add(r.ptr); update(); });
-$('#b-reset').addEventListener('click', async () => { stopRecite(); if (R.recorder) { await R.recorder.stop(); R.recorder = null; } resetSession(); });
+function markMistake() { const r = R.res; if (!r || r.finished) return; R.manualWrong.add(r.ptr); update(); }
+async function restartRecite() { stopRecite(); if (R.recorder) { await R.recorder.stop(); R.recorder = null; } resetSession(); }
+$('#b-more').addEventListener('click', () => {
+  const item = (label, fn, dis) => h('li', null, h('button', { disabled: dis || null, onclick: () => { closeDialog(); fn(); } }, label));
+  const done = R.res && R.res.finished;
+  dlg.classList.add('sheet-dlg');
+  openDialog('Recitation', h('div', null, h('ul', { class: 'menu' },
+    item('Reveal the next word', reveal, done),
+    item('Mark the current word as a mistake', markMistake, done),
+    item('Restart this page', restartRecite),
+    item(P.hide ? 'Show the words (Memorize off)' : 'Hide the words (Memorize on)', () => $('#t-hide').click())),
+    h('div', { class: 'legend', style: 'padding:4px 16px 16px' },
+      h('span', null, h('i', { style: 'background:var(--ok)' }), 'Recited'), h('span', null, h('i', { style: 'background:var(--bad)' }), 'Wrong word'),
+      h('span', null, h('i', { style: 'background:var(--warn)' }), 'Skipped'), h('span', null, h('i', { style: 'background:var(--gold)' }), 'Hint'))));
+});
 $('#b-finish').addEventListener('click', finish);
 document.addEventListener('keydown', (e) => {
   if (screen !== 'read' || R.mode !== 'recite' || e.target.closest('input, textarea, select, dialog')) return;
@@ -468,21 +579,21 @@ async function finish() {
   const acc = attempted ? Math.max(0, Math.round(((attempted - res.mistakes) / attempted) * 100)) : 0;
   // verses fully recited
   const verseDone = new Map();
-  R.words.forEach((w, i) => { const ok = /w-(done|fixed|hint|missed)/.test(res.cls[i]); verseDone.set(w.v, (verseDone.get(w.v) ?? true) && ok); });
+  R.words.forEach((w, i) => { const ok = /w-(done|fixed|hint|missed)/.test(res.cls[i]); const k = w.s + ':' + w.v; verseDone.set(k, (verseDone.get(k) ?? true) && ok); });
   const versesRecited = [...verseDone.values()].filter(Boolean).length;
   const ms = elapsed();
   const id = 'r' + Date.now();
   const session = {
-    id, t: Date.now(), s: R.s, from: R.from, to: R.to, words: res.doneWords, total: R.words.length, mistakes: res.mistakes,
+    id, t: Date.now(), page: R.page, s: R.s, from: R.from, to: R.to, words: res.doneWords, total: R.words.length, mistakes: res.mistakes,
     hints: R.hints.size, acc, ms, voice: R.finals.some((t) => !t.manual), verses: versesRecited,
-    mist: res.list.map((m) => ({ s: R.s, v: R.words[m.i].v, j: R.words[m.i].j, text: R.words[m.i].text, kind: m.kind })),
+    mist: res.list.map((m) => ({ s: R.words[m.i].s, v: R.words[m.i].v, j: R.words[m.i].j, text: R.words[m.i].text, kind: m.kind })),
   };
   if (R.recorder) { try { const blob = await R.recorder.stop(); if (blob && blob.size) { await putRecording(id, blob); session.rec = true; } } catch (e) {} R.recorder = null; }
   db.history.unshift(session); if (db.history.length > 500) { db.history.pop(); }
   // khatm map
   if (db.goal.khatmDays && db.goal.khatmMap) {
     const arr = db.goal.khatmMap.split(''); let added = 0;
-    verseDone.forEach((ok, v) => { if (ok) { const g = gIndex(R.s, v); if (arr[g] !== '1') { arr[g] = '1'; added++; } } });
+    verseDone.forEach((ok, k) => { if (ok) { const [vs, vv] = k.split(':').map(Number); const g = gIndex(vs, vv); if (arr[g] !== '1') { arr[g] = '1'; added++; } } });
     db.goal.khatmMap = arr.join('');
     const d = db.daily[today()] || (db.daily[today()] = { verses: 0, words: 0, ms: 0 }); d.khatm = (d.khatm || 0) + added;
   }
@@ -496,15 +607,18 @@ function showSummary(ses, res) {
     h('div', { class: 'stats' }, ...[['Accuracy', ses.acc + '%'], ['Words', `${ses.words}/${ses.total}`], ['Mistakes', ses.mistakes], ['Hints', ses.hints]].map(([k, v]) => h('div', { class: 'stat' }, h('div', { class: 'k' }, k), h('div', { class: 'val' }, String(v))))),
     h('div', { class: 'muted small' }, `${ses.verses} verse${ses.verses === 1 ? '' : 's'} recited in ${fmt(ses.ms)}. Today: ${g.have} of ${g.target} ${g.unit}.`));
   const items = ses.mist.map((m) => ({ ...m }));
-  R.hints.forEach((i) => { if (!items.some((x) => x.v === R.words[i].v && x.j === R.words[i].j)) items.push({ s: R.s, v: R.words[i].v, j: R.words[i].j, text: R.words[i].text, kind: 'hint' }); });
-  items.sort((a, b) => a.v - b.v || a.j - b.j);
+  R.hints.forEach((i) => { if (!items.some((x) => x.s === R.words[i].s && x.v === R.words[i].v && x.j === R.words[i].j)) items.push({ s: R.words[i].s, v: R.words[i].v, j: R.words[i].j, text: R.words[i].text, kind: 'hint' }); });
+  items.sort((a, b) => a.s - b.s || a.v - b.v || a.j - b.j);
   if (items.length) body.append(h('div', { class: 'small muted' }, 'Words to review'), mistakeList(items.slice(0, 80)));
   else body.append(h('p', { class: 'muted', style: 'margin:0' }, ses.words ? 'No mistakes and no hints. Excellent.' : 'Nothing was recited in this session.'));
   if (ses.rec) body.append(h('div', { class: 'small muted' }, 'Your recording is saved in Progress → Session history.'));
   body.append(h('div', { class: 'actions' },
     h('button', { class: 'btn', onclick: () => { closeDialog(); resetSession(); } }, 'Recite again'),
-    h('button', { class: 'btn accent', onclick: () => { closeDialog(); nextPassage(); } }, 'Next passage')));
-  openDialog(`${Q[ses.s - 1][1]} ${ses.from}–${ses.to}`, body);
+    h('button', { class: 'btn accent', onclick: () => { closeDialog(); nextPassage(); } }, R.page ? 'Next page' : 'Next passage')));
+  openDialog(sessionTitle(ses), body);
+}
+function sessionTitle(x) {
+  return x.page ? `Page ${x.page} · ${Q[x.s - 1][1]}` : `${Q[x.s - 1][1]} ${x.from}–${x.to}`;
 }
 function mistakeList(items) {
   return h('ul', { class: 'mlist' }, items.map((m) => h('li', null,
@@ -515,32 +629,38 @@ function mistakeList(items) {
 
 /* ======================= LISTEN (audio player) ======================= */
 const audio = $('#audio');
-const A = { v: 0, ayahLeft: 1, rangeLeft: 1, playing: false };
-function fillReciters(sel) { sel.textContent = ''; RECITERS.forEach(([id, name]) => sel.append(h('option', { value: id, selected: id === P.reciter }, name))); }
-fillReciters($('#p-reciter'));
-$('#p-reciter').addEventListener('change', (e) => { P.reciter = e.target.value; save(); updatePlayerLabel(); if (A.playing) playFrom(A.v); });
-$('#p-speed').value = String(P.speed);
-$('#p-speed').addEventListener('change', (e) => { P.speed = +e.target.value; audio.playbackRate = P.speed; save(); });
-$('#p-rep-a').value = String(P.repeatAyah); $('#p-rep-r').value = String(P.repeatRange);
-$('#p-rep-a').addEventListener('change', (e) => { P.repeatAyah = +e.target.value; A.ayahLeft = P.repeatAyah || Infinity; save(); });
-$('#p-rep-r').addEventListener('change', (e) => { P.repeatRange = +e.target.value; A.rangeLeft = P.repeatRange || Infinity; save(); });
-function updatePlayerLabel() {
-  const name = (RECITERS.find((r) => r[0] === P.reciter) || RECITERS[0])[1];
-  $('#p-rec').textContent = name;
-  $('#p-now').textContent = A.v ? `${Q[R.s - 1][1]} ${R.s}:${A.v}` : `${Q[R.s - 1][1]} from verse ${R.from}`;
+const A = { i: -1, ayahLeft: 1, rangeLeft: 1, playing: false }; // i = index into R.verses
+const reciter = () => RECITERS.find((r) => r[0] === P.reciter) || RECITERS[0];
+const initial = (ar) => ar.replace(/^(عبد|ال)/, '').trim()[0] || ar[0];
+function speedLabel(x) { return x + '×'; }
+function playerSummary() {
+  const rep = P.repeatAyah === 1 ? 'each verse once' : P.repeatAyah === 0 ? 'repeat each verse forever' : `each verse ×${P.repeatAyah}`;
+  const rng = P.repeatRange === 1 ? '' : P.repeatRange === 0 ? ' · loop forever' : ` · loop ×${P.repeatRange}`;
+  return `${speedLabel(P.speed)} · ${rep}${rng}`;
 }
-function playFrom(v, keepRange) {
+function updatePlayerLabel() {
+  const r = reciter();
+  $('#p-rec').textContent = r[1]; $('#p-av').textContent = initial(r[2]);
+  const cur = R.verses[A.i];
+  $('#p-now').textContent = (cur ? `${cur[0]}:${cur[1]}` : (R.page ? `Page ${R.page}` : `${R.from}–${R.to}`)) + ' · ' + playerSummary();
+
+}
+function playIndex(i, keepRange) {
   if (inClaude) { toast('Reciter audio can’t play on this preview link. It plays in the Android app and the installed web app.', 6000); return; }
-  A.v = Math.min(Math.max(v, R.from), R.to); A.ayahLeft = P.repeatAyah || Infinity;
+  if (i < 0 || i >= R.verses.length) return;
+  A.i = i; A.ayahLeft = P.repeatAyah || Infinity;
   if (!keepRange) A.rangeLeft = P.repeatRange || Infinity;
-  audio.src = audioUrl(P.reciter, R.s, A.v); audio.playbackRate = P.speed;
+  const [s, v] = R.verses[i];
+  audio.src = audioUrl(P.reciter, s, v); audio.playbackRate = P.speed;
   audio.play().then(() => setPlaying(true)).catch(() => { setPlaying(false); toast('Could not play audio. Check your internet connection.'); });
   highlightVerse();
 }
+function playFrom(s, v) { const i = R.verses.findIndex((x) => x[0] === s && x[1] === v); playIndex(i < 0 ? 0 : i); }
 function highlightVerse() {
-  R.vEls.forEach((el) => el.classList.toggle('playing', +el.dataset.v === A.v && A.playing));
-  const el = R.vEls[A.v - R.from];
-  if (el && A.playing) { const r = el.getBoundingClientRect(); if (r.top < 110 || r.bottom > innerHeight - 260) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  const cur = R.verses[A.i];
+  R.vEls.forEach((el) => el.classList.toggle('playing', !!cur && +el.dataset.s === cur[0] && +el.dataset.v === cur[1] && A.playing));
+  const el = cur && R.vEls[A.i];
+  if (el && A.playing) { const r = el.getBoundingClientRect(); if (r.top < 110 || r.bottom > innerHeight - 220) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
   updatePlayerLabel();
 }
 function setPlaying(p) {
@@ -548,8 +668,9 @@ function setPlaying(p) {
   $('#p-ico').innerHTML = p ? '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
   $('#p-play').setAttribute('aria-label', p ? 'Pause' : 'Play');
   highlightVerse();
-  if ('mediaSession' in navigator && Q) {
-    navigator.mediaSession.metadata = new MediaMetadata({ title: `${Q[R.s - 1][1]} ${R.s}:${A.v}`, artist: $('#p-rec').textContent, album: 'Tilawa' });
+  const cur = R.verses[A.i];
+  if ('mediaSession' in navigator && Q && cur) {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: `${Q[cur[0] - 1][1]} ${cur[0]}:${cur[1]}`, artist: reciter()[1], album: 'Tilawa' });
   }
 }
 let listenStart = 0;
@@ -558,25 +679,42 @@ audio.addEventListener('pause', () => { if (listenStart) { logDaily(0, 0, Date.n
 audio.addEventListener('ended', () => {
   if (listenStart) { logDaily(0, 0, Date.now() - listenStart); listenStart = 0; }
   if (--A.ayahLeft > 0) { audio.currentTime = 0; audio.play(); return; }
-  if (A.v < R.to) { playFrom(A.v + 1, true); return; }
-  if (--A.rangeLeft > 0) { playFrom(R.from, true); return; }
-  setPlaying(false); A.v = 0; highlightVerse();
+  if (A.i < R.verses.length - 1) { playIndex(A.i + 1, true); return; }
+  if (--A.rangeLeft > 0) { playIndex(0, true); return; }
+  // continue onto the next page when playing a page once through
+  if (R.page && R.page < PAGES.length && P.repeatRange === 1) { openPage(R.page + 1); setMode('listen'); playIndex(0); return; }
+  setPlaying(false); A.i = -1; highlightVerse();
 });
 audio.addEventListener('error', () => { if (A.playing) { setPlaying(false); toast('This recitation could not load. Try another reciter or check your connection.', 5000); } });
 $('#p-play').addEventListener('click', () => {
   if (A.playing) { audio.pause(); setPlaying(false); }
-  else if (A.v && audio.src) { audio.play().then(() => setPlaying(true)).catch(() => toast('Could not play audio.')); }
-  else playFrom(R.from);
+  else if (A.i >= 0 && audio.src) { audio.play().then(() => setPlaying(true)).catch(() => toast('Could not play audio.')); }
+  else playIndex(0);
 });
-$('#p-fwd').addEventListener('click', () => playFrom(Math.min(R.to, (A.v || R.from) + 1), true));
-$('#p-back').addEventListener('click', () => playFrom(Math.max(R.from, (A.v || R.from) - 1), true));
-function stopAudio() { if (!audio.paused) audio.pause(); setPlaying(false); A.v = 0; }
+$('#p-fwd').addEventListener('click', () => playIndex(Math.min(R.verses.length - 1, A.i + 1), true));
+$('#p-back').addEventListener('click', () => playIndex(Math.max(0, A.i - 1), true));
+function stopAudio() { if (!audio.paused) audio.pause(); setPlaying(false); A.i = -1; }
 if ('mediaSession' in navigator) {
   navigator.mediaSession.setActionHandler('play', () => $('#p-play').click());
   navigator.mediaSession.setActionHandler('pause', () => $('#p-play').click());
   navigator.mediaSession.setActionHandler('nexttrack', () => $('#p-fwd').click());
   navigator.mediaSession.setActionHandler('previoustrack', () => $('#p-back').click());
 }
+function openPlayerSheet() {
+  const list = h('div', { class: 'rlist' });
+  RECITERS.forEach(([id, en, ar]) => list.append(h('button', { 'aria-pressed': String(id === P.reciter), onclick: (e) => {
+    P.reciter = id; save(); $$('button', list).forEach((b) => b.setAttribute('aria-pressed', 'false')); e.currentTarget.setAttribute('aria-pressed', 'true');
+    updatePlayerLabel(); if (A.playing) playIndex(A.i, true);
+  } }, h('span', { class: 'avatar' }, initial(ar)), h('span', { class: 'nm' }, h('b', null, en), h('small', null, ar)), h('span', { class: 'check' }, '✓'))));
+  const body = h('div', { class: 'dlg-body' },
+    pills([[0.5, '0.5×'], [0.75, '0.75×'], [1, '1×'], [1.25, '1.25×'], [1.5, '1.5×']], P.speed, 'Speed', (v) => { P.speed = v; audio.playbackRate = v; save(); updatePlayerLabel(); }),
+    pills([[1, '1'], [2, '2'], [3, '3'], [5, '5'], [7, '7'], [10, '10'], [0, '∞']], P.repeatAyah, 'Repeat each verse', (v) => { P.repeatAyah = v; A.ayahLeft = v || Infinity; save(); updatePlayerLabel(); }),
+    pills([[1, 'Once'], [2, '2'], [3, '3'], [5, '5'], [10, '10'], [0, '∞']], P.repeatRange, R.page ? 'Repeat the whole page' : 'Repeat the whole range', (v) => { P.repeatRange = v; A.rangeLeft = v || Infinity; save(); updatePlayerLabel(); }),
+    h('div', { class: 'opt-group' }, h('div', { class: 'lbl' }, 'Reciter'), list));
+  dlg.classList.add('sheet-dlg'); openDialog('Playback', body);
+}
+$('#p-open').addEventListener('click', openPlayerSheet);
+$('#p-tune').addEventListener('click', openPlayerSheet);
 
 /* ======================= PROGRESS ======================= */
 function renderProgress() {
@@ -631,11 +769,11 @@ function renderProgress() {
   if (!H.length) { ul.append(h('li', { class: 'empty', style: 'display:block' }, 'No sessions yet. Recite a passage and press Finish.')); return; }
   H.slice(0, 40).forEach((x) => {
     const li = h('li', null,
-      h('div', null, h('b', null, `${Q[x.s - 1][1]} ${x.from}–${x.to}`),
+      h('div', null, h('b', null, sessionTitle(x)),
         h('div', { class: 'ref' }, `${new Date(x.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · ${x.words}/${x.total} words · ${x.mistakes} mistakes · ${x.hints} hints · ${fmt(x.ms)}`)),
       h('span', { class: 'acc' }, x.acc + '%'));
     const acts = h('div', { class: 'acts' },
-      h('button', { class: 'btn', onclick: () => { setMode('recite'); openPassage(x.s, x.from, x.to); } }, 'Recite again'),
+      h('button', { class: 'btn', onclick: () => { setMode('recite'); if (x.page) openPage(x.page); else openPassage(x.s, x.from, x.to); } }, 'Recite again'),
       x.mist && x.mist.length ? h('button', { class: 'btn', onclick: () => openDialog('Mistakes', h('div', { class: 'dlg-body' }, mistakeList(x.mist))) }, `Mistakes (${x.mist.length})`) : null,
       x.rec ? h('button', { class: 'btn', onclick: async (e) => {
         const blob = await getRecording(x.id).catch(() => null);
@@ -668,7 +806,7 @@ $('#g-khatm').addEventListener('change', (e) => {
 function renderSettings() {
   $('#s-theme').value = P.theme;
   const lang = $('#s-lang'); lang.textContent = ''; LANGS.forEach(([c, n]) => lang.append(h('option', { value: c, selected: c === P.trLang }, n)));
-  fillReciters($('#s-reciter'));
+  const sr = $('#s-reciter'); sr.textContent = ''; RECITERS.forEach(([id, en]) => sr.append(h('option', { value: id, selected: id === P.reciter }, en)));
   $('#s-record').checked = !!P.record; $('#s-record').disabled = isNative;
   $('#s-reminder').value = P.reminder || '';
   $('#s-rem-note').textContent = plugin('LocalNotifications') ? 'A notification at this time each day.' : 'Daily notifications work in the Android app. Here, add the page to your home screen and set a phone alarm.';
@@ -676,7 +814,7 @@ function renderSettings() {
 }
 $('#s-theme').addEventListener('change', (e) => { P.theme = e.target.value; save(); applyTheme(); });
 $('#s-lang').addEventListener('change', (e) => { P.trLang = e.target.value; save(); });
-$('#s-reciter').addEventListener('change', (e) => { P.reciter = e.target.value; $('#p-reciter').value = P.reciter; save(); });
+$('#s-reciter').addEventListener('change', (e) => { P.reciter = e.target.value; save(); updatePlayerLabel(); });
 $('#s-record').addEventListener('change', (e) => { P.record = e.target.checked; save(); });
 $('#s-reminder').addEventListener('change', async (e) => { P.reminder = e.target.value; save(); await scheduleReminder(); });
 $('#s-export').addEventListener('click', () => copy(exportJSON()));
@@ -710,7 +848,7 @@ speechReady.then(() => { if (R.units && R.units.length) update(); });
 fetch('data/quran.json').then((r) => { if (!r.ok) throw new Error(); return r.json(); }).then((data) => {
   Q = data; OFFS = []; let o = 0; Q.forEach((s) => { OFFS.push(o); o += s[4].length; });
   R.s = P.s; R.from = P.from; R.to = P.to;
-  renderHome();
+  return fetch('data/pages.json').then((r) => r.json()).then((pg) => { PAGES = pg; renderHome(); });
 }).catch(() => { $('#h-list').replaceChildren(h('li', { class: 'empty' }, 'The Qur’an text could not load. Close and reopen the app.')); });
 
 if ('serviceWorker' in navigator && !isNative && location.protocol === 'https:') {

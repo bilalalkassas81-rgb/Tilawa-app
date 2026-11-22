@@ -64,10 +64,11 @@
 
 <!-- READER / RECITE -->
 <section class="screen reader" id="scr-read" data-screen="read" hidden>
-  <header class="appbar"><div class="wrap">
-    <button class="icon-btn" id="r-prev" aria-label="Previous surah"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg></button>
-    <button class="title-btn" id="r-title"><b id="r-name">Al-Fatihah</b><small id="r-sub">Verses 1–7 · Juz 1</small></button>
-    <button class="icon-btn" id="r-next" aria-label="Next surah"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></button>
+  <header class="appbar"><div class="wrap rbar">
+    <button class="icon-btn" id="r-next" aria-label="Next page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <button class="title-btn" id="r-title"><b id="r-name">Al-Fatihah</b><small id="r-sub">Page 1 · Juz 1</small></button>
+    <button class="icon-btn" id="r-view" aria-label="Display options"><span style="font-weight:600;font-size:17px">Aa</span></button>
+    <button class="icon-btn" id="r-prev" aria-label="Previous page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></button>
   </div></header>
   <div class="wrap">
     <div class="toolbar">
@@ -76,22 +77,14 @@
         <button role="tab" data-m="listen" aria-selected="false">Listen</button>
       </div>
       <button class="chip" id="t-hide" aria-pressed="false">Memorize</button>
-      <button class="chip" id="t-tr" aria-pressed="false">Translation</button>
-      <button class="chip" id="t-tl" aria-pressed="false">Transliteration</button>
       <button class="chip" id="t-range">Verse range</button>
-      <button class="chip" id="t-smaller" aria-label="Smaller text">A−</button>
-      <button class="chip" id="t-bigger" aria-label="Larger text">A+</button>
     </div>
-    <div class="legend" aria-hidden="true" id="legend">
-      <span><i style="background:var(--ok)"></i>Recited</span>
-      <span><i style="background:var(--bad)"></i>Wrong word</span>
-      <span><i style="background:var(--warn)"></i>Skipped</span>
-      <span><i style="background:var(--gold)"></i>Hint</span>
-    </div>
-    <article class="sheet">
-      <div class="cartouche"><div class="ar" id="c-ar">سورة الفاتحة</div><div class="en" id="c-en"></div></div>
-      <div class="basmala" id="basmala" hidden>بِسۡمِ ٱللَّهِ ٱلرَّحۡمَٰنِ ٱلرَّحِيمِ</div>
-      <div class="mushaf" id="mushaf" lang="ar"><div class="loading">Loading…</div></div>
+    <article class="page" id="page">
+      <div class="page-in">
+        <div class="page-head"><span id="pg-surah"></span><span id="pg-juz"></span></div>
+        <div class="mushaf" id="mushaf" lang="ar"><div class="loading">Loading…</div></div>
+        <div class="page-foot"><span id="pg-num"></span></div>
+      </div>
     </article>
   </div>
 </section>
@@ -107,26 +100,23 @@
         <div class="l1"><span class="state" id="st">Ready</span><span class="meta" id="meta"></span></div>
         <div class="heard" id="heard"></div>
       </div>
+      <button class="icon-btn" id="b-reveal" aria-label="Reveal the next word" title="Reveal the next word"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <button class="icon-btn" id="b-more" aria-label="More recitation actions"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
       <button class="btn primary" id="b-finish">Finish</button>
-    </div>
-    <div class="actions">
-      <button class="btn" id="b-reveal">Reveal word</button>
-      <button class="btn" id="b-flag">Mark mistake</button>
-      <button class="btn" id="b-reset">Restart</button>
     </div>
   </div>
   <div class="wrap" id="dock-listen" hidden>
-    <div class="player">
-      <button class="icon-btn" id="p-back" aria-label="Previous verse"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zM9.5 12L18 6v12z"/></svg></button>
-      <button class="play" id="p-play" aria-label="Play"><svg viewBox="0 0 24 24" fill="currentColor" id="p-ico"><path d="M8 5v14l11-7z"/></svg></button>
-      <button class="icon-btn" id="p-fwd" aria-label="Next verse"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg></button>
-      <div class="now"><b id="p-now">Verse 1</b><span class="muted" id="p-rec">Alafasy</span></div>
-      <select id="p-speed" aria-label="Speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select>
-    </div>
-    <div class="player-opts">
-      <label>Repeat each verse <select id="p-rep-a"><option>1</option><option>2</option><option>3</option><option>5</option><option>7</option><option>10</option><option value="0">∞</option></select></label>
-      <label>Repeat range <select id="p-rep-r"><option>1</option><option>2</option><option>3</option><option>5</option><option>10</option><option value="0">∞</option></select></label>
-      <label>Reciter <select id="p-reciter"></select></label>
+    <div class="pl">
+      <button class="pl-who" id="p-open" aria-label="Choose reciter and playback options">
+        <span class="avatar" id="p-av">م</span>
+        <span class="pl-txt"><b id="p-rec">Mishary Alafasy</b><small id="p-now">Ready</small></span>
+      </button>
+      <div class="pl-ctl">
+        <button class="icon-btn" id="p-fwd" aria-label="Next verse"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 6h-2v12h2zM15 12L6.5 6v12z" transform="matrix(-1 0 0 1 24 0)"/></svg></button>
+        <button class="play" id="p-play" aria-label="Play"><svg viewBox="0 0 24 24" fill="currentColor" id="p-ico"><path d="M8 5v14l11-7z"/></svg></button>
+        <button class="icon-btn" id="p-back" aria-label="Previous verse"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zM9.5 12L18 6v12z" transform="matrix(-1 0 0 1 24 0)"/></svg></button>
+        <button class="icon-btn" id="p-tune" aria-label="Speed, repeat and reciter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></button>
+      </div>
     </div>
   </div>
 </div>

@@ -1,7 +1,7 @@
 // Offline support: app shell + Qur'an text are cached on install; translations and audio are cached as you use them.
-const VERSION = 'tilawa-v1.0.0';
+const VERSION = 'tilawa-v1.1.1';
 const SHELL = ['./', 'index.html', 'css/app.css', 'css/fonts.css', 'js/app.js', 'js/match.js', 'js/speech.js', 'js/store.js', 'js/meta.js',
-  'data/quran.json', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',
+  'data/quran.json', 'data/pages.json', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',
   'fonts/amiri-quran-arabic-400-normal.woff2', 'fonts/readex-pro-latin-400-normal.woff2', 'fonts/readex-pro-latin-500-normal.woff2', 'fonts/readex-pro-latin-600-normal.woff2'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {

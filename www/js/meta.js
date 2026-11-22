@@ -4,23 +4,24 @@ export function juzOf(s, v) { let j = 1; JUZ.forEach(([js, jv], i) => { if (s > 
 
 // Folder names on everyayah.com (per-verse MP3s named SSSVVV.mp3).
 export const RECITERS = [
-  ['Alafasy_128kbps', 'Mishary Rashid Alafasy'],
-  ['Abdul_Basit_Murattal_192kbps', 'Abdul Basit (Murattal)'],
-  ['Husary_128kbps', 'Mahmoud Khalil Al-Husary'],
-  ['Husary_Muallim_128kbps', 'Al-Husary (teaching, with repetition)'],
-  ['Minshawy_Murattal_128kbps', 'Mohamed Siddiq Al-Minshawi'],
-  ['Abdurrahmaan_As-Sudais_192kbps', 'Abdurrahman As-Sudais'],
-  ['Saood_ash-Shuraym_128kbps', 'Saud Ash-Shuraim'],
-  ['MaherAlMuaiqly128kbps', 'Maher Al-Muaiqly'],
-  ['Ghamadi_40kbps', 'Saad Al-Ghamdi'],
-  ['Hudhaify_128kbps', 'Ali Al-Hudhaify'],
-  ['Muhammad_Ayyoub_128kbps', 'Muhammad Ayyoub'],
-  ['Yasser_Ad-Dussary_128kbps', 'Yasser Ad-Dossari'],
+  ['Alafasy_128kbps', 'Mishary Rashid Alafasy', 'مشاري راشد العفاسي'],
+  ['Abdul_Basit_Murattal_192kbps', 'Abdul Basit (Murattal)', 'عبد الباسط عبد الصمد'],
+  ['Husary_128kbps', 'Mahmoud Khalil Al-Husary', 'محمود خليل الحصري'],
+  ['Husary_Muallim_128kbps', 'Al-Husary (teaching, with repetition)', 'الحصري (المصحف المعلم)'],
+  ['Minshawy_Murattal_128kbps', 'Mohamed Siddiq Al-Minshawi', 'محمد صديق المنشاوي'],
+  ['Abdurrahmaan_As-Sudais_192kbps', 'Abdurrahman As-Sudais', 'عبد الرحمن السديس'],
+  ['Saood_ash-Shuraym_128kbps', 'Saud Ash-Shuraim', 'سعود الشريم'],
+  ['MaherAlMuaiqly128kbps', 'Maher Al-Muaiqly', 'ماهر المعيقلي'],
+  ['Ghamadi_40kbps', 'Saad Al-Ghamdi', 'سعد الغامدي'],
+  ['Hudhaify_128kbps', 'Ali Al-Hudhaify', 'علي الحذيفي'],
+  ['Muhammad_Ayyoub_128kbps', 'Muhammad Ayyoub', 'محمد أيوب'],
+  ['Yasser_Ad-Dussary_128kbps', 'Yasser Ad-Dossari', 'ياسر الدوسري'],
 ];
 export const audioUrl = (rec, s, v) => `https://everyayah.com/data/${rec}/${String(s).padStart(3, '0')}${String(v).padStart(3, '0')}.mp3`;
 
 export const LANGS = [['en', 'English'], ['fr', 'Français'], ['es', 'Español'], ['id', 'Bahasa Indonesia'], ['tr', 'Türkçe'], ['ru', 'Русский'], ['ur', 'اردو'], ['bn', 'বাংলা'], ['zh', '中文'], ['sv', 'Svenska']];
 
+export const TOTAL_PAGES = 604;
 export const TOTAL_VERSES = 6236;
 const AR = '٠١٢٣٤٥٦٧٨٩';
 export const toAr = (n) => String(n).replace(/\d/g, (d) => AR[d]);
