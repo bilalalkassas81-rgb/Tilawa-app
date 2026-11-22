@@ -6,7 +6,13 @@ const isNative = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
 const NativeSR = isNative ? Cap.Plugins.SpeechRecognition : null;
 const WebSR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-export const speechSupport = NativeSR ? 'native' : WebSR ? 'web' : 'none';
+// Inside a Claude artifact the frame blocks the browser's own mic; the host offers `dictation` instead.
+export const inClaude = !!(window.claude && window.claude.use);
+let dictation = null;
+export let speechSupport = NativeSR ? 'native' : inClaude ? 'none' : WebSR ? 'web' : 'none';
+export const speechReady = inClaude
+  ? Promise.resolve(window.claude.use('dictation')).catch(() => null).then((d) => { dictation = d || null; if (d) speechSupport = 'dictation'; return speechSupport; })
+  : Promise.resolve(speechSupport);
 export { isNative };
 
 export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, onError }) {
@@ -62,11 +68,37 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
     set('starting');
   }
 
+  let unsubs = [];
+  function startDictation() {
+    // must run synchronously inside the click: start() is called before anything is awaited
+    const p = dictation.start({ language: 'ar' });
+    unsubs = [
+      dictation.onPartial(({ text }) => onPartial(text)),
+      dictation.onFinal(({ text }) => onFinal(text)),
+      dictation.onState(({ state: s, reason }) => {
+        if (s === 'idle') {
+          want = false; unsubs.forEach((u) => u()); unsubs = []; set('idle');
+          if (reason === 'unavailable') onError && onError({ code: 'unavailable', message: 'Arabic voice recognition is not available for your account here. Use the Android app or the web version.' });
+          else if (reason === 'not_granted') onError && onError({ code: 'not_granted', message: 'Microphone access is off for this page. Turn it on in the page’s Permissions menu.' });
+          else if (reason === 'upstream_error' || reason === 'rate_limited') onError && onError({ code: reason, message: 'Listening stopped. Tap the microphone to continue.' });
+        } else set(s);
+      }),
+    ];
+    return p.catch((e) => {
+      want = false; unsubs.forEach((u) => u()); unsubs = []; set('idle');
+      const msg = e && e.code === 'unavailable' ? 'Arabic voice recognition is not available for your account here.'
+        : e && e.code === 'not_granted' ? 'Microphone access is off for this page. Turn it on in the page’s Permissions menu.'
+        : 'Could not start listening. Try again.';
+      throw Object.assign(new Error(msg), { code: e && e.code });
+    });
+  }
+
   return {
     get active() { return want; },
     get state() { return state; },
     async start() {
       if (want) return; want = true;
+      if (speechSupport === 'dictation') return startDictation();
       try {
         if (speechSupport === 'native') await startNative();
         else if (speechSupport === 'web') startWeb();
@@ -75,6 +107,7 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
     },
     async stop() {
       want = false;
+      if (speechSupport === 'dictation') { set('finishing'); await dictation.stop().catch(() => {}); return; }
       if (speechSupport === 'native') { await NativeSR.stop().catch(() => {}); if (lastPartial) { onFinal(lastPartial); lastPartial = ''; } set('idle'); }
       else if (rec) { set('finishing'); try { rec.stop(); } catch (_) { set('idle'); } }
     },

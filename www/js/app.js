@@ -1,5 +1,5 @@
 import { normalize, tokens, buildUnits, align, findVerses } from './match.js';
-import { createRecognizer, speechSupport, isNative, startVoiceRecording } from './speech.js';
+import { createRecognizer, speechSupport, speechReady, inClaude, isNative, startVoiceRecording } from './speech.js';
 import { db, save, today, logDaily, streak, exportJSON, importJSON, putRecording, getRecording, deleteRecording } from './store.js';
 import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr } from './meta.js';
 
@@ -530,6 +530,7 @@ function updatePlayerLabel() {
   $('#p-now').textContent = A.v ? `${Q[R.s - 1][1]} ${R.s}:${A.v}` : `${Q[R.s - 1][1]} from verse ${R.from}`;
 }
 function playFrom(v, keepRange) {
+  if (inClaude) { toast('Reciter audio can’t play on this preview link. It plays in the Android app and the installed web app.', 6000); return; }
   A.v = Math.min(Math.max(v, R.from), R.to); A.ayahLeft = P.repeatAyah || Infinity;
   if (!keepRange) A.rangeLeft = P.repeatRange || Infinity;
   audio.src = audioUrl(P.reciter, R.s, A.v); audio.playbackRate = P.speed;
@@ -705,6 +706,7 @@ async function scheduleReminder() {
 
 /* ======================= BOOT ======================= */
 applyPrefs();
+speechReady.then(() => { if (R.units && R.units.length) update(); });
 fetch('data/quran.json').then((r) => { if (!r.ok) throw new Error(); return r.json(); }).then((data) => {
   Q = data; OFFS = []; let o = 0; Q.forEach((s) => { OFFS.push(o); o += s[4].length; });
   R.s = P.s; R.from = P.from; R.to = P.to;
