@@ -28,9 +28,9 @@ Tilawa only checks the words. It cannot judge tajweed (pronunciation rules), so 
 
 ## Install it (free)
 
-**Android:** open the [latest release](../../releases/latest), download `Tilawa.apk` and open it. If Android asks, allow your browser or Files app to “install unknown apps”.
+**Android:** open the [latest release](https://github.com/bilalalkassas81-rgb/Tilawa-app/releases/latest), download `Tilawa.apk` and open it. If Android asks, allow your browser or Files app to “install unknown apps”.
 
-**iPhone, iPad and any other phone or computer:** open the web app at `https://<your-github-username>.github.io/tilawa-app/`.
+**iPhone, iPad and any other phone or computer:** open the web app at **https://bilalalkassas81-rgb.github.io/Tilawa-app/**.
 - iPhone (Safari): tap Share, then **Add to Home Screen**.
 - Android (Chrome): tap ⋮, then **Install app**.
 
