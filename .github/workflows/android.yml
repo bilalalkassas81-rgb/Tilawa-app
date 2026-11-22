@@ -30,12 +30,25 @@ jobs:
           npm ci
           npx cap sync android
 
-      - name: Build APK
+      - name: Check the signing password is set
+        env:
+          TILAWA_KEY_PASSWORD: ${{ secrets.TILAWA_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TILAWA_KEY_PASSWORD" ]; then
+            echo "::error::Add the repository secret TILAWA_KEY_PASSWORD (Settings > Secrets and variables > Actions) so the APK is signed with the app's key."
+            exit 1
+          fi
+
+      - name: Build signed APK
         working-directory: android
+        env:
+          TILAWA_KEY_PASSWORD: ${{ secrets.TILAWA_KEY_PASSWORD }}
+          TILAWA_VERSION_CODE: ${{ github.run_number }}
+          TILAWA_VERSION_NAME: 1.1.${{ github.run_number }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-          cp app/build/outputs/apk/debug/app-debug.apk ../Tilawa.apk
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk ../Tilawa.apk
 
       - uses: actions/upload-artifact@v4
         with:
