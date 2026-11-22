@@ -1,0 +1,17 @@
+{
+  "name": "Tilawa — Qur'an recitation",
+  "short_name": "Tilawa",
+  "description": "Recite the Qur'an and see your mistakes as you go. Memorize, listen, set goals. Free, every feature included.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0D6453",
+  "theme_color": "#0D6453",
+  "categories": ["education", "books", "lifestyle"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

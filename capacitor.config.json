@@ -1,0 +1,11 @@
+{
+  "appId": "app.tilawa.quran",
+  "appName": "Tilawa",
+  "webDir": "www",
+  "android": { "backgroundColor": "#0D6453" },
+  "ios": { "backgroundColor": "#0D6453" },
+  "plugins": {
+    "LocalNotifications": { "iconColor": "#0D6453" },
+    "StatusBar": { "overlaysWebView": false }
+  }
+}

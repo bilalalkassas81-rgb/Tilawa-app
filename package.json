@@ -1,0 +1,23 @@
+{
+  "name": "tilawa-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tilawa: free Qur'an recitation companion with mistake detection, memorization, audio, goals and progress.",
+  "license": "MIT",
+  "scripts": {
+    "serve": "npx http-server www -p 8080 -c-1",
+    "sync": "npx cap sync",
+    "android": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor-community/speech-recognition": "7.0.1",
+    "@capacitor/android": "8.6.2",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.6.2",
+    "@capacitor/local-notifications": "8.3.1",
+    "@capacitor/status-bar": "8.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.2"
+  }
+}
