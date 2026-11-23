@@ -7,6 +7,8 @@ const defaults = {
     reminder: '', s: 1, from: 1, to: 7,
   },
   goal: { type: 'verses', daily: 10, khatmDays: 0, khatmStart: 0, khatmPos: 0 },
+  plans: [],        // memorization plans {id,type,scope:{kind,a,b},reverse,deadline,created,done,day}
+  memo: { surahs: [] }, // surahs the user has memorized (for tests)
   history: [],       // {id,t,s,from,to,words,total,mistakes,hints,acc,ms,voice,mist:[{s,v,text,kind}],rec?:bool}
   bookmarks: [],     // {s,v,t,note}
   lastRead: null,    // {s,v,t}

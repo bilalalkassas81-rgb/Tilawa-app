@@ -3,7 +3,7 @@ import { createRecognizer, speechSupport, speechReady, inClaude, isNative, start
 import { db, save, today, logDaily, streak, exportJSON, importJSON, putRecording, getRecording, deleteRecording } from './store.js';
 import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr, BASMALA } from './meta.js';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 function h(tag, attrs, ...kids) {
@@ -134,6 +134,9 @@ function renderHome() {
     $('#h-khatm-s').textContent = nx < 0 ? 'Khatm complete. Alhamdulillah.' :
       `${done.toLocaleString()} of ${TOTAL_VERSES.toLocaleString()} verses · day ${daysGone + 1} of ${k} · about ${khatmDailyTarget()} verses a day · next: ${Q[fromGlobal(nx).s - 1][1]} ${fromGlobal(nx).v}`;
   }
+  const hp = $('#h-plans'); hp.textContent = '';
+  db.plans.filter((p) => !planStats(p).complete).slice(0, 3).forEach((p) => hp.append(planCard(p, true)));
+  $('#h-test-s').textContent = db.memo.surahs.length ? `Random places from your ${db.memo.surahs.length} memorized surah${db.memo.surahs.length === 1 ? '' : 's'}` : 'Recite from a random place in what you’ve memorized';
   renderHomeList();
 }
 $('#h-continue').addEventListener('click', () => {
@@ -509,7 +512,8 @@ function update(force) {
   else heard.append(h('span', { class: 'note' }, micNote()));
   $('#b-finish').disabled = !R.finals.length;
   $('#b-reveal').disabled = res.finished;
-  if (res.finished && rec && rec.active && !autoTurning) {
+  if (res.finished && rec && rec.active && !autoTurning && T) { autoTurning = true; setTimeout(() => { nextQuestion().finally(() => { autoTurning = false; }); }, 900); }
+  else if (res.finished && rec && rec.active && !autoTurning) {
     if (R.page && R.page < PAGES.length) { autoTurning = true; setTimeout(() => { turn(1).finally(() => { autoTurning = false; }); }, 700); }
     else { rec.stop(); toast('Passage complete. Press Finish to see your results.'); }
   }
@@ -579,7 +583,7 @@ $('#b-more').addEventListener('click', () => {
       h('span', null, h('i', { style: 'background:var(--ok)' }), 'Recited'), h('span', null, h('i', { style: 'background:var(--bad)' }), 'Wrong word'),
       h('span', null, h('i', { style: 'background:var(--warn)' }), 'Skipped'), h('span', null, h('i', { style: 'background:var(--gold)' }), 'Hint'))));
 });
-$('#b-finish').addEventListener('click', finish);
+$('#b-finish').addEventListener('click', () => (T ? nextQuestion() : finish()));
 document.addEventListener('keydown', (e) => {
   if (screen !== 'read' || R.mode !== 'recite' || e.target.closest('input, textarea, select, dialog')) return;
   if (e.code === 'Space') { e.preventDefault(); reveal(); }
@@ -608,6 +612,7 @@ async function finish(opts = {}) {
     id, t: Date.now(), page: R.page, s: R.s, from: R.from, to: R.to, words: res.doneWords, total: R.words.length, mistakes: res.mistakes,
     hints: R.hints.size, acc, ms, voice: R.finals.some((t) => !t.manual), verses: versesRecited,
     mist: res.list.map((m) => ({ s: R.words[m.i].s, v: R.words[m.i].v, j: R.words[m.i].j, text: R.words[m.i].text, kind: m.kind })),
+    hidden: !!P.hide, test: !!opts.test,
   };
   if (R.recorder && !opts.silent) { try { const blob = await R.recorder.stop(); if (blob && blob.size) { await putRecording(id, blob); session.rec = true; } } catch (e) {} R.recorder = null; }
   db.history.unshift(session); if (db.history.length > 500) { db.history.pop(); }
@@ -618,10 +623,12 @@ async function finish(opts = {}) {
     db.goal.khatmMap = arr.join('');
     const d = db.daily[today()] || (db.daily[today()] = { verses: 0, words: 0, ms: 0 }); d.khatm = (d.khatm || 0) + added;
   }
+  applyPlans(verseDone, !!P.hide);
   logDaily(versesRecited, res.doneWords, ms);
   save();
-  if (opts.silent) { toast(`Saved ${sessionTitle(session)}: ${acc}% · ${res.mistakes} mistake${res.mistakes === 1 ? '' : 's'}`); return; }
+  if (opts.silent) { if (!opts.quiet) toast(`Saved ${sessionTitle(session)}: ${acc}% · ${res.mistakes} mistake${res.mistakes === 1 ? '' : 's'}`); return session; }
   showSummary(session, res);
+  return session;
 }
 function showSummary(ses, res) {
   const g = goalProgress();
@@ -640,7 +647,7 @@ function showSummary(ses, res) {
   openDialog(sessionTitle(ses), body);
 }
 function sessionTitle(x) {
-  return x.page ? `Page ${x.page} · ${Q[x.s - 1][1]}` : `${Q[x.s - 1][1]} ${x.from}–${x.to}`;
+  return (x.test ? 'Test · ' : '') + (x.page ? `Page ${x.page} · ${Q[x.s - 1][1]}` : `${Q[x.s - 1][1]} ${x.from}–${x.to}`);
 }
 function mistakeList(items) {
   return h('ul', { class: 'mlist' }, items.map((m) => h('li', null,
@@ -739,6 +746,272 @@ function openPlayerSheet() {
 $('#p-open').addEventListener('click', openPlayerSheet);
 $('#p-tune').addEventListener('click', openPlayerSheet);
 
+/* ======================= MEMORIZATION PLANS ======================= */
+// A plan covers a portion (surahs, juz or pages) by a deadline. Memorize and Review plans only count verses
+// recited while the words were hidden; Recite plans count any recitation. The daily target recalculates
+// from what is left and the days remaining.
+const PLAN_TYPES = { memorize: 'Memorize', review: 'Review', recite: 'Recite' };
+const DAY = 864e5;
+const startOfDay = (t = Date.now()) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+function scopeVerses(sc, reverse) {
+  let a, b;
+  if (sc.kind === 'juz') { a = gIndex(...JUZ[sc.a - 1]); b = sc.b < 30 ? gIndex(...JUZ[sc.b]) : TOTAL_VERSES; }
+  else if (sc.kind === 'pages') { a = gIndex(...PAGES[sc.a - 1]); b = sc.b < PAGES.length ? gIndex(...PAGES[sc.b]) : TOTAL_VERSES; }
+  else { a = OFFS[sc.a - 1]; b = sc.b < 114 ? OFFS[sc.b] : TOTAL_VERSES; }
+  const out = []; for (let g = a; g < b; g++) { const { s, v } = fromGlobal(g); out.push([s, v]); }
+  if (!reverse) return out;
+  // reverse order goes surah by surah from the end (e.g. An-Nas first), verses inside a surah stay in order
+  const groups = []; for (const x of out) { if (!groups.length || groups[groups.length - 1][0][0] !== x[0]) groups.push([]); groups[groups.length - 1].push(x); }
+  return groups.reverse().flat();
+}
+function scopeLabel(sc) {
+  if (sc.kind === 'juz') return sc.a === sc.b ? `Juz ${sc.a}` : `Juz ${sc.a}–${sc.b}`;
+  if (sc.kind === 'pages') return sc.a === sc.b ? `Page ${sc.a}` : `Pages ${sc.a}–${sc.b}`;
+  return sc.a === sc.b ? Q[sc.a - 1][1] : `${Q[sc.a - 1][1]} – ${Q[sc.b - 1][1]}`;
+}
+const planCache = new Map();
+function planVerses(p) {
+  const key = p.id + (p.reverse ? 'r' : '');
+  if (!planCache.has(key)) { const list = scopeVerses(p.scope, p.reverse); const idx = new Map(list.map(([s, v], i) => [s + ':' + v, i])); planCache.set(key, { list, idx }); }
+  return planCache.get(key);
+}
+function planStats(p) {
+  const { list } = planVerses(p);
+  const done = (p.done.match(/1/g) || []).length, total = list.length, left = total - done;
+  const daysLeft = Math.max(1, Math.ceil((startOfDay(p.deadline) - startOfDay()) / DAY) + 1);
+  const doneToday = p.day && p.day.d === today() ? p.day.n : 0;
+  const target = left + doneToday > 0 ? Math.ceil((left + doneToday) / daysLeft) : 0;
+  const expected = Math.min(total, Math.round(total * Math.min(1, (Date.now() - p.created) / Math.max(DAY, p.deadline - p.created))));
+  return { done, total, left, daysLeft, doneToday, target, behind: done < expected - target, complete: left === 0, overdue: Date.now() > p.deadline + DAY && left > 0 };
+}
+function applyPlans(verseDone, hidden) {
+  let changed = false;
+  for (const p of db.plans) {
+    if (p.type !== 'recite' && !hidden) continue;
+    const { idx } = planVerses(p); const arr = p.done.split(''); let n = 0;
+    verseDone.forEach((ok, k) => { const i = idx.get(k); if (ok && i != null && arr[i] !== '1') { arr[i] = '1'; n++; } });
+    if (!n) continue;
+    p.done = arr.join('');
+    if (!p.day || p.day.d !== today()) p.day = { d: today(), n: 0 };
+    p.day.n += n; changed = true;
+    if (p.type === 'memorize' && !p.done.includes('0')) {
+      // a finished memorization plan adds its surahs to "memorized" (whole surahs only)
+      const surahs = new Set(planVerses(p).list.map((x) => x[0]));
+      surahs.forEach((s) => { const inPlan = planVerses(p).list.filter((x) => x[0] === s).length; if (inPlan === Q[s - 1][4].length && !db.memo.surahs.includes(s)) db.memo.surahs.push(s); });
+      toast(`Plan complete: ${PLAN_TYPES[p.type]} ${scopeLabel(p.scope)}. Alhamdulillah!`, 5000);
+    }
+  }
+  return changed;
+}
+function continuePlan(p) {
+  const { list } = planVerses(p); const st = planStats(p);
+  let i = p.done.indexOf('0');
+  if (i < 0) { toast('This plan is complete.'); return; }
+  const want = Math.max(1, Math.min(st.target - st.doneToday > 0 ? st.target - st.doneToday : st.target, 20));
+  const [s, v] = list[i]; let e = v;
+  while (e - v + 1 < want && i + 1 < list.length && list[i + 1][0] === s && list[i + 1][1] === e + 1 && p.done[i + 1] === '0') { i++; e++; }
+  if (p.type !== 'recite' && !P.hide) { P.hide = true; save(); applyPrefs(); }
+  if (p.type === 'recite' && P.hide) { P.hide = false; save(); applyPrefs(); }
+  setMode('recite');
+  openPassage(s, v, e);
+  toast(p.type === 'recite' ? `Recite ${Q[s - 1][1]} ${v}–${e}` : `Memorize is on. Recite ${Q[s - 1][1]} ${v}–${e} from memory; tap a hidden word to peek.`, 4500);
+}
+function planCard(p, compact) {
+  const st = planStats(p);
+  const pct = st.total ? Math.round((st.done / st.total) * 100) : 0;
+  const deadline = new Date(p.deadline).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: new Date(p.deadline).getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined });
+  const todayTxt = st.complete ? 'Complete' : st.doneToday >= st.target ? `Today’s ${st.target} done ✓` : `Today: ${st.doneToday} of ${st.target} verses`;
+  return h('div', { class: 'plan' },
+    h('div', { class: 'plan-top' },
+      h('span', { class: 'plan-type ' + p.type }, PLAN_TYPES[p.type]),
+      h('span', { class: 'ttl' }, h('b', null, scopeLabel(p.scope) + (p.reverse ? ' (reverse)' : '')), h('small', null, `${st.done}/${st.total} verses · ${pct}% · by ${deadline}`)),
+    ),
+    h('div', { class: 'bar-track' }, h('i', { style: `width:${pct}%` })),
+    h('div', { class: 'plan-meta' },
+      h('span', { class: 'today' }, h('b', null, todayTxt), h('br'), h('span', { class: st.overdue || st.behind ? 'behind' : '' }, st.complete ? '' : st.overdue ? 'Past the deadline' : `${st.daysLeft} day${st.daysLeft === 1 ? '' : 's'} left${st.behind ? ' · behind, target raised' : ''}`)),
+      compact ? h('button', { class: 'btn accent', onclick: () => continuePlan(p), disabled: st.complete || null }, 'Continue') : null),
+    compact ? null : h('div', { class: 'actions' },
+      h('button', { class: 'btn accent', onclick: () => continuePlan(p), disabled: st.complete || null }, 'Continue'),
+      h('button', { class: 'btn', onclick: () => editPlan(p) }, 'Edit'),
+      h('button', { class: 'btn danger', onclick: () => {
+        openDialog('Delete this plan?', h('div', { class: 'dlg-body' }, h('p', { style: 'margin:0' }, `${PLAN_TYPES[p.type]} ${scopeLabel(p.scope)} and its progress will be removed.`),
+          h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: closeDialog }, 'Cancel'),
+            h('button', { class: 'btn danger', onclick: () => { db.plans = db.plans.filter((x) => x.id !== p.id); save(); closeDialog(); renderProgress(); } }, 'Delete'))));
+      } }, 'Delete')));
+}
+function surahSelect(id, val) { const sel = h('select', { id }); Q.forEach((s, i) => sel.append(h('option', { value: i + 1, selected: i + 1 === val }, `${i + 1}. ${s[1]}`))); return sel; }
+function numSelect(id, n, val, label) { const sel = h('select', { id }); for (let i = 1; i <= n; i++) sel.append(h('option', { value: i, selected: i === val }, `${label} ${i}`)); return sel; }
+function editPlan(existing) {
+  const p = existing ? structuredClone(existing) : { type: 'memorize', scope: { kind: 'juz', a: 30, b: 30 }, reverse: true, deadline: startOfDay() + 90 * DAY };
+  const scopeBox = h('div', { class: 'row2' });
+  const drawScope = () => {
+    scopeBox.textContent = '';
+    let A, B;
+    if (p.scope.kind === 'surah') { A = surahSelect('pl-a', p.scope.a); B = surahSelect('pl-b', p.scope.b); }
+    else if (p.scope.kind === 'juz') { A = numSelect('pl-a', 30, p.scope.a, 'Juz'); B = numSelect('pl-b', 30, p.scope.b, 'Juz'); }
+    else { A = h('input', { id: 'pl-a', type: 'number', min: 1, max: 604, value: p.scope.a, inputmode: 'numeric' }); B = h('input', { id: 'pl-b', type: 'number', min: 1, max: 604, value: p.scope.b, inputmode: 'numeric' }); }
+    const sync = () => {
+      const max = p.scope.kind === 'surah' ? 114 : p.scope.kind === 'juz' ? 30 : 604;
+      p.scope.a = Math.min(max, Math.max(1, +A.value || 1)); p.scope.b = Math.min(max, Math.max(p.scope.a, +B.value || p.scope.a)); B.value = p.scope.b; summary();
+    };
+    A.addEventListener('change', sync); B.addEventListener('change', sync);
+    scopeBox.append(h('div', { class: 'field' }, h('label', { for: 'pl-a' }, 'From'), A), h('div', { class: 'field' }, h('label', { for: 'pl-b' }, 'To'), B));
+  };
+  const dateIn = h('input', { type: 'date', id: 'pl-date' });
+  const setDate = (t) => { p.deadline = t; const d = new Date(t); dateIn.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; summary(); };
+  dateIn.addEventListener('change', () => { const [y, m, d] = dateIn.value.split('-').map(Number); if (y) { p.deadline = new Date(y, m - 1, d).getTime(); summary(); } });
+  const note = h('div', { class: 'muted small' });
+  const summary = () => {
+    const n = scopeVerses(p.scope, false).length;
+    const days = Math.max(1, Math.ceil((startOfDay(p.deadline) - startOfDay()) / DAY) + 1);
+    note.textContent = `${n.toLocaleString()} verses in ${days} day${days === 1 ? '' : 's'}: about ${Math.ceil(n / days)} a day.` +
+      (p.type === 'recite' ? ' Any recitation counts.' : ' Only verses you recite with the words hidden (Memorize on) count.');
+  };
+  const body = h('div', { class: 'dlg-body' },
+    pills([['memorize', 'Memorize'], ['review', 'Review'], ['recite', 'Recite']], p.type, 'Plan type', (v) => { p.type = v; summary(); }),
+    pills([['surah', 'Surahs'], ['juz', 'Juz'], ['pages', 'Pages']], p.scope.kind, 'Portion', (v) => {
+      p.scope = v === 'surah' ? { kind: v, a: 78, b: 114 } : v === 'juz' ? { kind: v, a: 30, b: 30 } : { kind: v, a: 582, b: 604 }; drawScope(); summary();
+    }),
+    scopeBox,
+    pills([[false, 'In order'], [true, 'Reverse (from An-Nas back)']], !!p.reverse, 'Order', (v) => { p.reverse = v; }),
+    h('div', { class: 'opt-group' }, h('div', { class: 'lbl' }, 'Finish by'),
+      h('div', { class: 'pills' }, ...[[14, '2 weeks'], [30, '1 month'], [90, '3 months'], [180, '6 months'], [365, '1 year']].map(([d, t]) => h('button', { onclick: () => setDate(startOfDay() + d * DAY) }, t))),
+      dateIn),
+    note,
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: closeDialog }, 'Cancel'),
+      h('button', { class: 'btn accent', onclick: () => {
+        if (p.deadline < startOfDay()) { note.textContent = 'Choose a date from today onwards.'; return; }
+        if (existing) {
+          const changedScope = JSON.stringify(existing.scope) !== JSON.stringify(p.scope) || existing.reverse !== p.reverse;
+          Object.assign(existing, { type: p.type, scope: p.scope, reverse: p.reverse, deadline: p.deadline });
+          if (changedScope) { planCache.clear(); existing.done = '0'.repeat(planVerses(existing).list.length); existing.day = null; }
+        } else {
+          const np = { id: 'p' + Date.now(), type: p.type, scope: p.scope, reverse: !!p.reverse, deadline: p.deadline, created: Date.now(), day: null };
+          np.done = '0'.repeat(planVerses(np).list.length); db.plans.push(np);
+        }
+        save(); closeDialog(); renderProgress(); toast(existing ? 'Plan updated' : 'Plan created. Find it on the home screen.');
+      } }, existing ? 'Save' : 'Create plan')));
+  drawScope(); setDate(p.deadline);
+  dlg.classList.add('sheet-dlg'); openDialog(existing ? 'Edit plan' : 'New memorization plan', body);
+}
+$('#p-plan-new').addEventListener('click', () => editPlan(null));
+
+/* ---------- memorized surahs ---------- */
+function editMemorized(after) {
+  const sel = new Set(db.memo.surahs);
+  const grid = h('div', { class: 'sgrid' });
+  const draw = () => { grid.textContent = ''; Q.forEach((s, i) => grid.append(h('button', { 'aria-pressed': String(sel.has(i + 1)), onclick: (e) => { sel.has(i + 1) ? sel.delete(i + 1) : sel.add(i + 1); e.currentTarget.setAttribute('aria-pressed', String(sel.has(i + 1))); count(); } }, h('i', null, String(i + 1)), h('span', null, s[1])))); };
+  const cnt = h('div', { class: 'muted small' });
+  const count = () => { const v = [...sel].reduce((a, s) => a + Q[s - 1][4].length, 0); cnt.textContent = `${sel.size} surah${sel.size === 1 ? '' : 's'} · ${v.toLocaleString()} verses`; };
+  const juzSurahs = (j) => { const out = []; for (let s = 1; s <= 114; s++) { const sj = juzOf(s, 1); const ej = juzOf(s, Q[s - 1][4].length); if (sj >= j && ej <= j) out.push(s); } return out; };
+  const preset = (list) => { list.forEach((s) => sel.add(s)); draw(); count(); };
+  draw(); count();
+  dlg.classList.add('sheet-dlg');
+  openDialog('Surahs I’ve memorized', h('div', { class: 'dlg-body' },
+    h('div', { class: 'pills' },
+      h('button', { onclick: () => preset([1]) }, 'Al-Fatihah'),
+      h('button', { onclick: () => preset(juzSurahs(30)) }, 'Juz 30'),
+      h('button', { onclick: () => preset(juzSurahs(29)) }, 'Juz 29'),
+      h('button', { onclick: () => { sel.clear(); draw(); count(); } }, 'Clear')),
+    grid, cnt,
+    h('button', { class: 'btn accent', onclick: () => { db.memo.surahs = [...sel].sort((a, b) => a - b); save(); closeDialog(); renderProgress(); if (screen === 'home') renderHome(); after && after(); } }, 'Save')));
+}
+$('#p-memo-edit').addEventListener('click', () => editMemorized());
+
+/* ======================= TEST MODE ======================= */
+// Questions start at random verses inside the chosen surahs. The first words are shown as a cue,
+// the rest is hidden and scored by the same matcher as normal recitation.
+let T = null;
+function testSetup(presetSurahs) {
+  const st = { scope: db.memo.surahs.length ? 'memo' : 'pick', pick: new Set(presetSurahs || []), count: 5, len: 2 };
+  const pickBtn = h('div');
+  const err = h('div', { class: 'small', style: 'color:var(--bad)' });
+  const drawPick = () => {
+    pickBtn.textContent = '';
+    if (st.scope === 'memo') { pickBtn.append(h('div', { class: 'muted small' }, db.memo.surahs.length ? `${db.memo.surahs.length} memorized surah${db.memo.surahs.length === 1 ? '' : 's'}: ` + db.memo.surahs.slice(0, 6).map((s) => Q[s - 1][1]).join(', ') + (db.memo.surahs.length > 6 ? '…' : '') : 'You haven’t marked any surahs as memorized yet.'), h('button', { class: 'btn', style: 'margin-top:6px', onclick: () => editMemorized(() => testSetup()) }, 'Edit memorized surahs')); }
+    else { const sel = surahSelect('ts-s', [...st.pick][0] || 67); st.pick = new Set([+sel.value]); sel.addEventListener('change', () => (st.pick = new Set([+sel.value]))); pickBtn.append(h('div', { class: 'field' }, h('label', { for: 'ts-s' }, 'Surah'), sel)); }
+  };
+  drawPick();
+  dlg.classList.add('sheet-dlg');
+  openDialog('Test my memorization', h('div', { class: 'dlg-body' },
+    pills([['memo', 'My memorized surahs'], ['pick', 'One surah']], st.scope, 'Test me on', (v) => { st.scope = v; drawPick(); }),
+    pickBtn,
+    pills([[3, '3'], [5, '5'], [10, '10']], st.count, 'Questions', (v) => (st.count = v)),
+    pills([[1, '1 verse'], [2, '2 verses'], [3, '3 verses'], [5, '5 verses']], st.len, 'Recite this much each time', (v) => (st.len = v)),
+    h('div', { class: 'muted small' }, 'Each question opens at a random verse with the words hidden. The first two words are shown; recite from there. Tap a hidden word to peek (counts as a hint).'),
+    err,
+    h('button', { class: 'btn accent', onclick: () => {
+      const surahs = st.scope === 'memo' ? db.memo.surahs : [...st.pick];
+      if (!surahs.length) { err.textContent = 'Choose at least one surah first.'; return; }
+      closeDialog(); startTest(surahs, st.count, st.len);
+    } }, 'Start test')));
+}
+$('#h-test').addEventListener('click', () => testSetup());
+$('#p-test').addEventListener('click', () => testSetup());
+function startTest(surahs, count, len) {
+  const pool = []; surahs.forEach((s) => { const n = Q[s - 1][4].length; for (let v = 1; v <= n; v++) pool.push([s, v]); });
+  const qs = []; const used = new Set();
+  for (let k = 0; k < count && used.size < pool.length; k++) {
+    let x, tries = 0;
+    do { x = pool[Math.floor(Math.random() * pool.length)]; tries++; } while ((used.has(x[0] + ':' + x[1]) || (qs.length && qs[qs.length - 1].s === x[0] && Math.abs(qs[qs.length - 1].v - x[1]) < len + 2 && tries < 20)) && tries < 50);
+    used.add(x[0] + ':' + x[1]);
+    qs.push({ s: x[0], v: x[1], e: Math.min(Q[x[0] - 1][4].length, x[1] + len - 1) });
+  }
+  T = { qs, i: 0, results: [], prevHide: !!P.hide, started: Date.now() };
+  showQuestion();
+}
+function showQuestion(keep) {
+  const q = T.qs[T.i];
+  P.hide = true; applyPrefs(); setMode('recite');
+  keepMic = !!keep;
+  try { openPassage(q.s, q.v, q.e); } finally { keepMic = false; }
+  // cue: the first two words of the question stay visible (not counted as hints)
+  setTimeout(() => { for (let i = 0; i < Math.min(2, R.words.length); i++) R.peeks.add(i); update(true); }, 0);
+  $('#test-bar').hidden = false;
+  $('#tb-q').textContent = `Question ${T.i + 1} of ${T.qs.length}`;
+  $('#tb-s').textContent = `Continue from ${Q[q.s - 1][1]} ${q.s}:${q.v}` + (q.e > q.v ? ` (to ${q.e})` : '');
+  $('#tb-next').textContent = T.i + 1 < T.qs.length ? 'Next' : 'Finish';
+  requestAnimationFrame(fitPage);
+}
+async function nextQuestion() {
+  if (!T || T.busy) return; T.busy = true;
+  try {
+    const q = T.qs[T.i];
+    const listening = !!(rec && rec.active);
+    const ses = R.finals.length ? await finish({ silent: true, quiet: true, test: true }) : null;
+    T.results.push(ses ? { ...q, acc: ses.acc, mistakes: ses.mistakes, hints: ses.hints, words: ses.words, total: ses.total, mist: ses.mist } : { ...q, skipped: true, acc: 0, mistakes: 0, hints: 0, words: 0, total: R.words.length, mist: [] });
+    T.i++;
+    if (T.i < T.qs.length) showQuestion(listening);
+    else endTest();
+  } finally { if (T) T.busy = false; }
+}
+function endTest(cancelled) {
+  if (!T) return;
+  stopRecite();
+  const t = T; T = null;
+  P.hide = t.prevHide; save(); applyPrefs(); update(true);
+  $('#test-bar').hidden = true;
+  if (cancelled && !t.results.length) return;
+  const answered = t.results.filter((r) => !r.skipped);
+  const score = t.results.length ? Math.round(t.results.reduce((a, r) => a + (r.skipped ? 0 : r.acc), 0) / t.results.length) : 0;
+  db.history.forEach((x) => { if (x.testRun === undefined && x.t >= t.started) x.testRun = t.started; });
+  save();
+  const body = h('div', { class: 'dlg-body' },
+    h('div', { class: 'stats' }, ...[['Score', score + '%'], ['Answered', `${answered.length}/${t.results.length}`], ['Mistakes', answered.reduce((a, r) => a + r.mistakes, 0)], ['Hints', answered.reduce((a, r) => a + r.hints, 0)]]
+      .map(([k, v]) => h('div', { class: 'stat' }, h('div', { class: 'k' }, k), h('div', { class: 'val' }, String(v))))),
+    ...t.results.map((r, i) => h('div', { class: 'qres' }, h('span', { class: 'n' }, String(i + 1)),
+      h('span', null, h('b', null, `${Q[r.s - 1][1]} ${r.s}:${r.v}${r.e > r.v ? '–' + r.e : ''}`), h('div', { class: 'ref' }, r.skipped ? 'Skipped' : `${r.mistakes} mistake${r.mistakes === 1 ? '' : 's'} · ${r.hints} hint${r.hints === 1 ? '' : 's'}`)),
+      h('span', { class: 'sc' }, r.skipped ? '—' : r.acc + '%'))),
+    h('div', { class: 'muted small' }, score >= 90 ? 'Excellent. Your memorization of these places is strong.' : score >= 70 ? 'Good. Review the questions with mistakes.' : 'Keep going: practise the places below with Memorize on, then test again.'),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: () => { closeDialog(); const weak = t.results.filter((r) => r.skipped || r.acc < 90); if (weak[0]) { P.hide = true; save(); applyPrefs(); openPassage(weak[0].s, weak[0].v, weak[0].e); } } }, 'Practise weak spots'),
+      h('button', { class: 'btn accent', onclick: () => { closeDialog(); startTest([...new Set(t.qs.map((q) => q.s))].length > 1 ? (db.memo.surahs.length ? db.memo.surahs : [...new Set(t.qs.map((q) => q.s))]) : [t.qs[0].s], t.qs.length, t.qs[0].e - t.qs[0].v + 1); } }, 'New test')));
+  openDialog('Test results', body);
+}
+$('#tb-next').addEventListener('click', nextQuestion);
+$('#tb-end').addEventListener('click', () => endTest(true));
+
 /* ======================= PROGRESS ======================= */
 function renderProgress() {
   if (!Q) return;
@@ -768,6 +1041,13 @@ function renderProgress() {
   // goals form
   $('#g-type').value = db.goal.type; $('#g-daily').value = db.goal.daily; $('#g-khatm').value = String(db.goal.khatmDays || 0);
   $('#g-note').textContent = db.goal.khatmDays ? `Khatm plan started ${new Date(db.goal.khatmStart).toLocaleDateString()}. ${khatmDone()} of ${TOTAL_VERSES} verses recited so far. Your daily verse goal rises to keep you on schedule.` : 'Choose a khatm plan to get a daily target that finishes the whole Qur’an on time.';
+  // memorization
+  const mv = db.memo.surahs.reduce((a, s) => a + Q[s - 1][4].length, 0);
+  $('#p-memo-s').textContent = db.memo.surahs.length ? `${db.memo.surahs.length} surah${db.memo.surahs.length === 1 ? '' : 's'} · ${mv.toLocaleString()} of ${TOTAL_VERSES.toLocaleString()} verses (${((mv / TOTAL_VERSES) * 100).toFixed(1)}%)` : 'None marked yet. Mark them to test yourself on them.';
+  $('#p-memo-bar').style.width = (mv / TOTAL_VERSES) * 100 + '%';
+  const pp = $('#p-plans'); pp.textContent = '';
+  db.plans.forEach((p) => pp.append(planCard(p, false)));
+  if (!db.plans.length) pp.append(h('div', { class: 'empty' }, 'No memorization plans yet. A plan sets a portion (surahs, juz or pages) and a deadline, and gives you a daily target that adjusts if you fall behind.'));
   // weak words
   const weak = new Map();
   H.forEach((x) => (x.mist || []).forEach((m) => { const k = `${m.s}:${m.v}:${m.j}`; const o = weak.get(k) || { ...m, n: 0 }; o.n++; weak.set(k, o); }));

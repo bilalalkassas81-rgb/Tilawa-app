@@ -11,6 +11,8 @@ A free Qur’an recitation companion. Recite out loud and Tilawa follows along w
 | **Mistake history** | Each session keeps its mistakes. The Progress tab lists the words you miss most, with a “Practise these verses” button. |
 | **Session summary** | Accuracy, mistakes, hints, time, and the exact words to review, with links back to each verse. |
 | **Listen back to yourself** | Optionally records your voice during a session so you can replay it (web version). |
+| **Test mode** | Opens at a random verse in the surahs you’ve memorized, shows the first two words as a cue, hides the rest, and scores each question. Ends with a results screen and “practise weak spots”. |
+| **Memorization plans** | Memorize, Review or Recite a portion (surahs, juz or pages) by a deadline, in order or in reverse. The daily target recalculates if you fall behind. Memorize and Review only count verses recited with the words hidden. |
 | **Goals and streaks** | Daily goal in verses, minutes or words, a progress ring, and a day streak. |
 | **Khatm planner** | Finish the whole Qur’an in 30 days, 60 days, 6 months, 1 or 2 years. It tracks every verse you recite and adjusts your daily target. |
 | **Daily reminder** | A notification at a time you pick (Android app). |

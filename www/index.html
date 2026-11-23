@@ -43,6 +43,12 @@
         <div class="bar-track" style="margin:8px 0"><i id="h-khatm-bar"></i></div>
         <div class="muted small" id="h-khatm-s"></div>
       </div>
+      <div id="h-plans" class="plan-list"></div>
+      <button class="test-card" id="h-test">
+        <span class="test-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg></span>
+        <span class="test-txt"><b>Test my memorization</b><small id="h-test-s">Recite from a random place in what you’ve memorized</small></span>
+        <span class="chev" aria-hidden="true">›</span>
+      </button>
     </div>
     <div class="section">
       <div class="search">
@@ -78,6 +84,11 @@
       </div>
       <button class="chip" id="t-hide" aria-pressed="false">Memorize</button>
       <button class="chip" id="t-range">Verse range</button>
+    </div>
+    <div class="test-bar" id="test-bar" hidden>
+      <div class="tb-txt"><b id="tb-q">Question 1 of 5</b><small id="tb-s">Continue from Al-Mulk 67:12</small></div>
+      <button class="btn" id="tb-next">Next</button>
+      <button class="btn" id="tb-end">End</button>
     </div>
     <article class="page" id="page">
       <div class="page-in">
@@ -142,6 +153,15 @@
         </div>
         <div class="muted small" id="g-note"></div>
       </div>
+    </div>
+    <div class="section">
+      <h2>Memorization</h2>
+      <div class="card memo-card">
+        <div class="memo-row"><div><b>Surahs I’ve memorized</b><div class="muted small" id="p-memo-s">None marked yet</div></div><button class="btn" id="p-memo-edit">Edit</button></div>
+        <div class="bar-track"><i id="p-memo-bar"></i></div>
+      </div>
+      <div id="p-plans" class="plan-list"></div>
+      <div class="actions"><button class="btn accent" id="p-plan-new">New plan</button><button class="btn" id="p-test">Start a test</button></div>
     </div>
     <div class="section">
       <h2>Words you miss most</h2>

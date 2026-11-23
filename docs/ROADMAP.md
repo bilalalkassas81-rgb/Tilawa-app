@@ -11,8 +11,8 @@ This comes from research into what Tarteel offers, based on its public help cent
 - Streak, daily goals and a khatm planner
 
 ## Next, in order
-1. **Test mode**: start at a random place in the surahs you mark as memorized, show 1–2 cue words, then score with the existing matcher. (M)
-2. **Memorize / Review / Recite goals**: a portion and a deadline, and the target recalculates if you fall behind. Memorize and Review only count while the verses are hidden. (M)
+1. ~~**Test mode**~~ (done): start at a random place in the surahs you mark as memorized, show 1–2 cue words, then score with the existing matcher. (M)
+2. ~~**Memorize / Review / Recite goals**~~ (done): a portion and a deadline, and the target recalculates if you fall behind. Memorize and Review only count while the verses are hidden. (M)
 3. **Similar verses (mutashabihat)**: build an index from quran.json ahead of time, show it in the verse menu and highlight the differing words. (M)
 4. **Download audio by surah or juz** for offline listening. (S–M)
 5. **Tajweed colours** from openly licensed tajweed-annotated text (licence to be checked). Display only. (M)
