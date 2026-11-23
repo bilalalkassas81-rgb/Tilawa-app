@@ -94,7 +94,8 @@ h1, h2, h3 { text-wrap: balance; margin: 0; }
 .empty { color: var(--muted); background: var(--sheet); border: 1px dashed var(--line); border-radius: 14px; padding: 18px; }
 
 /* Reader */
-.toolbar { display: flex; gap: 6px; overflow-x: auto; padding-block: 10px; scrollbar-width: none; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding-block: 10px; }
+.toolbar .chip, .toolbar .seg { max-width: 100%; }
 .toolbar::-webkit-scrollbar { display: none; }
 .chip { flex: none; border: 1px solid var(--line); background: var(--sheet); border-radius: 999px; padding: 6px 12px; font-size: 13px; color: var(--muted); white-space: nowrap; }
 .chip[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
@@ -334,7 +335,7 @@ dialog::backdrop { background: rgb(0 0 0 / .4); }
 .test-bar { display: flex; align-items: center; gap: 8px; background: var(--gold-soft); border: 1px solid color-mix(in srgb, var(--gold) 40%, transparent); border-radius: 14px; padding: 8px 10px 8px 14px; margin-bottom: 8px; }
 .tb-txt { flex: 1; min-width: 0; display: grid; }
 .tb-txt b { font-size: 14px; }
-.tb-txt small { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb-txt small { color: var(--muted); font-size: 12px; line-height: 1.3; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .sgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; max-height: 46vh; overflow-y: auto; padding: 2px; }
 .sgrid button { display: flex; gap: 8px; align-items: center; text-align: left; border: 1px solid var(--line); background: var(--sheet); border-radius: 10px; padding: 7px 9px; font-size: 13px; min-width: 0; }
 .sgrid button span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -347,8 +348,9 @@ dialog::backdrop { background: rgb(0 0 0 / .4); }
 .plan-meta { align-items: center; } .plan-meta .btn { flex: none; }
 
 /* ---------- Mushaf line layout: 15 printed lines per page ---------- */
-.mushaf.lines { --row: calc(var(--qsize) * 1.9); line-height: 1.2; text-align: initial; text-align-last: auto; padding: 2px 0; }
+.mushaf.lines { --row: calc(var(--qsize) * var(--row-em, 1.9)); line-height: 1.2; text-align: initial; text-align-last: auto; padding: 2px 0; }
 .mushaf.lines .row { height: var(--row); display: flex; align-items: center; }
+.page .mushaf.lines:not(.stacked) .row { line-height: var(--row-em, 1.9); } /* word boxes stay inside their row when rows close up */
 .mushaf.lines .ln { justify-content: space-between; white-space: nowrap; }
 .mushaf.lines .ln.short { justify-content: center; gap: .32em; }
 .mushaf.lines.measuring .ln { justify-content: flex-start; gap: 0; }
@@ -361,3 +363,21 @@ dialog::backdrop { background: rgb(0 0 0 / .4); }
 .mushaf.lines .bas-row { justify-content: center; font-size: var(--qsize); }
 .mushaf.lines .w.playing { background-image: linear-gradient(var(--gold-soft), var(--gold-soft)); background-repeat: no-repeat; background-position: 0 60%; background-size: 100% 1.1em; }
 .mushaf.opening { padding-block: calc(var(--qsize) * 1.2); }
+.mushaf.lines.opening { padding-block: 0; display: flex; flex-direction: column; justify-content: center; }
+/* the page box is narrowed by fitPage() to the text width when height is the limit: keep it centered */
+.reader .page { margin-inline: auto; }
+.reader .page-head { flex-wrap: nowrap; gap: 8px; white-space: nowrap; }
+.reader .page-head > span { overflow: hidden; text-overflow: ellipsis; }
+/* short screens: less chrome around the page so all 15 lines fit above the dock */
+@media (max-height: 760px) {
+  .screen.reader .appbar .wrap { min-height: 46px; }
+  .screen.reader .title-btn { padding-block: 2px; line-height: 1.25; }
+  .screen.reader .toolbar { padding-block: 4px; }
+  .screen.reader .toolbar .seg button { padding-block: 4px; }
+  .screen.reader .toolbar .chip { padding-block: 4px; }
+  .reader .page { padding: 4px; margin-bottom: 4px; }
+  .reader .page-in { padding: 2px 8px 2px; }
+  .reader .page-head { font-size: 13px; line-height: 1.4; padding-block: 0; }
+  .reader .page-foot { padding: 0; }
+  .reader .page-foot span { font-size: 13px; height: 1.5em; }
+}

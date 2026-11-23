@@ -29,6 +29,7 @@ jobs:
         run: |
           sh tests/check-syntax.sh
           node tests/match.test.mjs
+          node tests/followalong.test.mjs
 
       - name: Install and copy the web app into the Android project
         run: |
