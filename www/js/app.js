@@ -3,7 +3,7 @@ import { createRecognizer, speechSupport, speechReady, inClaude, isNative, start
 import { db, save, today, logDaily, streak, exportJSON, importJSON, putRecording, getRecording, deleteRecording } from './store.js';
 import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr, BASMALA } from './meta.js';
 
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 function h(tag, attrs, ...kids) {
@@ -194,7 +194,7 @@ async function renderSearch(q, ul) {
   const ql = q.toLowerCase();
   Q.forEach((s, i) => { if (s[1].toLowerCase().replace(/[-']/g, '').includes(ql.replace(/[-']/g, '')) || s[2].toLowerCase().includes(ql) || normalize(s[0]).includes(normalize(q) || '\u0000')) ul.append(surahItem(i + 1)); });
   if (/[؀-ۿ]/.test(q)) {
-    findVerses(Q, q, 20).forEach((r) => ul.append(verseItem(r.s, r.v)));
+    findVerses(QS || Q, q, 20).forEach((r) => ul.append(verseItem(r.s, r.v)));
   } else if (q.length >= 3) {
     const lang = P.trLang;
     const tr = await getTr(lang).catch(() => null); if (!tr || $('#h-search').value.trim() !== q) return;
@@ -226,7 +226,7 @@ function showFinder(text) {
   const toks = tokens(text, true);
   if (toks.length < 2) return;
   note.hidden = false; note.textContent = 'Heard: ' + toks.map((t) => t.norm).join(' ');
-  const res = findVerses(Q, text, 6);
+  const res = findVerses(QS || Q, text, 6);
   ul.textContent = '';
   res.forEach((r) => ul.append(verseItem(r.s, r.v, null, () => { finder && finder.stop(); openVerse(r.s, r.v); })));
   if (res.length && res[0].score >= 9 && finder && finder.active) finder.stop();
@@ -302,12 +302,16 @@ async function renderPassage() {
   R.words = []; R.vEls = [];
   const bm = new Set(db.bookmarks.map((b) => b.s + ':' + b.v));
   const frag = document.createDocumentFragment();
-  for (const [s, v] of R.verses) {
+  const lineMode = !!(R.page && !P.tr && !P.translit && LINES);
+  box.classList.toggle('lines', lineMode);
+  box.classList.toggle('opening', lineMode && R.page <= 2);
+  if (lineMode) renderLines(frag, bm);
+  else for (const [s, v] of R.verses) {
     if (v === 1) frag.append(surahHeader(s));
     const vEl = h('div', { class: 'v', 'data-s': s, 'data-v': v });
     const ay = h('span', { class: 'ayah' });
     Q[s - 1][4][v - 1].forEach((t, j) => {
-      const i = R.words.length; R.words.push({ text: t, s, v, j });
+      const i = R.words.length; R.words.push({ text: t, s, v, j, plain: QI ? QI[s - 1][v - 1][j] : '' });
       ay.append(h('span', { class: 'w', 'data-i': i }, t), ' ');
     });
     ay.append(h('button', { class: 'vm' + (bm.has(s + ':' + v) ? ' bm' : ''), 'data-s': s, 'data-v': v, 'aria-label': `Verse ${s}:${v} options` }, toAr(v)), ' ');
@@ -324,6 +328,45 @@ async function renderPassage() {
   fitPage();
 }
 
+/* Draw a Mushaf page exactly as printed: the same 15 lines, with the surah headers and basmala in their place. */
+function renderLines(frag, bm) {
+  const p = R.page, L = LINES;
+  const b = p < L.page.length ? L.page[p] : WORDS.total;
+  let li = WORDS.pageLine[p - 1];
+  for (; li < L.line.length && L.line[li] < b; li++) {
+    const ws = L.line[li], we = Math.min(li + 1 < L.line.length ? L.line[li + 1] : WORDS.total, b);
+    if (WORDS.surahStart.has(ws)) {
+      const s = WORDS.s[ws];
+      frag.append(h('div', { class: 'row sh-row' }, h('div', { class: 'cartouche' }, h('span', { class: 'ar' }, 'سُورَةُ ' + Q[s - 1][0]))));
+      if (s !== 1 && s !== 9) frag.append(h('div', { class: 'row bas-row' }, BASMALA));
+    }
+    const ln = h('div', { class: 'row ln' });
+    for (let g = ws; g < we; g++) {
+      const s = WORDS.s[g], v = WORDS.v[g], j = WORDS.j[g];
+      const i = R.words.length;
+      R.words.push({ text: Q[s - 1][4][v - 1][j], s, v, j, plain: QI ? QI[s - 1][v - 1][j] : '' });
+      ln.append(h('span', { class: 'w', 'data-i': i }, Q[s - 1][4][v - 1][j]));
+      if (WORDS.ayahEnd.has(g)) ln.append(h('button', { class: 'vm' + (bm.has(s + ':' + v) ? ' bm' : ''), 'data-s': s, 'data-v': v, 'aria-label': `Verse ${s}:${v} options` }, toAr(v)));
+    }
+    frag.append(ln);
+  }
+}
+function fitLines(box, availW, availH) {
+  const rowEls = $$('.row', box); if (!rowEls.length) return;
+  const root = document.documentElement;
+  root.style.setProperty('--qsize', '20px');
+  box.classList.add('measuring');
+  const widths = $$('.ln', box).map((ln) => { let w = 0; for (const c of ln.children) w += c.getBoundingClientRect().width; return { ln, w: w + (ln.children.length - 1) * 6.6 }; });
+  box.classList.remove('measuring');
+  const maxW = Math.max(...widths.map((x) => x.w), 1);
+  const opening = box.classList.contains('opening');
+  widths.forEach(({ ln, w }) => ln.classList.toggle('short', opening || w < maxW * 0.8));
+  const fw = (20 * availW) / maxW;
+  const fh = availH / (rowEls.length * 1.9);
+  const f = Math.max(12, Math.min(fw, fh, opening ? 34 : 40));
+  root.style.setProperty('--qsize', Math.floor(f * 10) / 10 + 'px');
+}
+
 /* Fit the page's text to the screen, like a printed Mushaf page. */
 function fitPage() {
   const box = $('#mushaf');
@@ -337,6 +380,7 @@ function fitPage() {
   const chrome = page.offsetHeight - box.offsetHeight;
   const avail = bottom - top - chrome;
   if (avail < 150) { document.documentElement.style.setProperty('--qsize', P.size + 'px'); return; }
+  if (box.classList.contains('lines')) { fitLines(box, box.clientWidth - 4, avail - 8); return; }
   let lo = 13, hi = 44;
   for (let k = 0; k < 9; k++) {
     const mid = (lo + hi) / 2;
@@ -489,7 +533,7 @@ let lastCur = -1;
 function update(force) {
   if (!R.units) return;
   const rs = R.finals.concat(tokens(R.partial, false));
-  const res = R.res = align(R.units, R.words.length, rs, R.manualWrong, R.hints);
+  const res = R.res = align(R.units, R.words.length, rs, R.manualWrong, R.hints, { free: !T });
   const any = rs.length > 0;
   for (let i = 0; i < R.els.length; i++) {
     let c = res.cls[i];
@@ -599,7 +643,7 @@ async function turn(dir) {
 }
 async function finish(opts = {}) {
   if (!opts.silent) stopRecite();
-  const res = align(R.units, R.words.length, R.finals, R.manualWrong, R.hints);
+  const res = align(R.units, R.words.length, R.finals, R.manualWrong, R.hints, { free: !T });
   const attempted = res.doneWords + res.list.filter((m) => m.kind === 'wrong' && !/w-fixed/.test(res.cls[m.i])).length;
   const acc = attempted ? Math.max(0, Math.round(((attempted - res.mistakes) / attempted) * 100)) : 0;
   // verses fully recited
@@ -689,7 +733,10 @@ function playFrom(s, v) { const i = R.verses.findIndex((x) => x[0] === s && x[1]
 function highlightVerse() {
   const cur = R.verses[A.i];
   R.vEls.forEach((el) => el.classList.toggle('playing', !!cur && +el.dataset.s === cur[0] && +el.dataset.v === cur[1] && A.playing));
-  const el = cur && R.vEls[A.i];
+  // in the Mushaf line layout a verse spans several lines, so highlight its words
+  let first = null;
+  R.els.forEach((el, i) => { const w = R.words[i]; const on = !!cur && A.playing && w.s === cur[0] && w.v === cur[1]; el.classList.toggle('playing', on); if (on && !first) first = el; });
+  const el = (cur && R.vEls[A.i]) || first;
   if (el && A.playing) { const r = el.getBoundingClientRect(); if (r.top < 110 || r.bottom > innerHeight - 220) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
   updatePlayerLabel();
 }
@@ -1146,12 +1193,30 @@ async function scheduleReminder() {
 }
 
 /* ======================= BOOT ======================= */
+// Word-level index of the Mushaf: which surah/verse each word belongs to, where lines and pages start.
+let LINES = null, QI = null, QS = null;
+const WORDS = { total: 0 };
+function setupLines(ln, im) {
+  if (im) { QI = im; QS = Q.map((s, i) => [s[0], s[1], s[2], s[3], im[i].map((v, vi) => v.map((w, j) => w || s[4][vi][j]))]); }
+  if (!ln) return;
+  LINES = ln;
+  const total = Q.reduce((a, s) => a + s[4].reduce((b, v) => b + v.length, 0), 0);
+  WORDS.total = total;
+  WORDS.s = new Uint8Array(total); WORDS.v = new Uint16Array(total); WORDS.j = new Uint16Array(total);
+  let g = 0;
+  Q.forEach((sur, si) => sur[4].forEach((words, vi) => words.forEach((_, j) => { WORDS.s[g] = si + 1; WORDS.v[g] = vi + 1; WORDS.j[g] = j; g++; })));
+  WORDS.ayahEnd = new Set(ln.ayah.slice(1).map((x) => x - 1).concat([total - 1]));
+  WORDS.surahStart = new Set(ln.surah);
+  WORDS.pageLine = []; let li = 0;
+  ln.page.forEach((ps) => { while (li < ln.line.length && ln.line[li] < ps) li++; WORDS.pageLine.push(li); });
+}
 applyPrefs();
 speechReady.then(() => { if (R.units && R.units.length) update(); });
 fetch('data/quran.json').then((r) => { if (!r.ok) throw new Error(); return r.json(); }).then((data) => {
   Q = data; OFFS = []; let o = 0; Q.forEach((s) => { OFFS.push(o); o += s[4].length; });
   R.s = P.s; R.from = P.from; R.to = P.to;
-  return fetch('data/pages.json').then((r) => r.json()).then((pg) => { PAGES = pg; renderHome(); });
+  return Promise.all([fetch('data/pages.json').then((r) => r.json()), fetch('data/lines.json').then((r) => r.json()), fetch('data/imlai.json').then((r) => r.json()).catch(() => null)])
+    .then(([pg, ln, im]) => { PAGES = pg; setupLines(ln, im); renderHome(); });
 }).catch(() => { $('#h-list').replaceChildren(h('li', { class: 'empty' }, 'The Qur’an text could not load. Close and reopen the app.')); });
 
 if ('serviceWorker' in navigator && !isNative && location.protocol === 'https:') {

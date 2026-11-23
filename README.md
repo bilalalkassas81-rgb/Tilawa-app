@@ -66,6 +66,9 @@ You do not need a store to share Tilawa: the APK link and the web app link are e
 
 ## Credits
 
+- Mushaf text, pages and printed line layout (Madinah Mushaf, Hafs): [quran-text](https://github.com/quran-ws/quran-text) by quran.ws (CC BY 4.0), from the King Fahd Glorious Qur’an Printing Complex release. See `www/data/QURAN-TEXT-LICENSE.txt`.
+- Qur’an font: KFGQPC HAFS Uthmanic Script v3 by the King Fahd Glorious Qur’an Printing Complex, shipped unmodified under its free licence (`www/fonts/KFGQPC-FONT-LICENSE.txt`).
+
 - Qur’an text (Uthmani), translations and transliteration: [quran-json](https://github.com/risan/quran-json) (CC BY-SA 4.0), sourced from Tanzil.net and other open projects. See `www/data/QURAN-JSON-LICENSE.txt`.
 - Recitation audio streams from [EveryAyah.com](https://everyayah.com).
 - Fonts: Amiri Quran and Readex Pro (SIL Open Font License), via Fontsource.

@@ -5,7 +5,7 @@
   --gold: #9C7420; --gold-soft: #F3E9D2; --ok: #17785A; --bad: #BE3328; --bad-soft: #F8E1DE;
   --warn: #A86A0E; --warn-soft: #F6EAD3; --veil: #C9D4CF;
   --shadow: 0 1px 2px rgb(20 32 27 / .06), 0 8px 24px rgb(20 32 27 / .07);
-  --f-quran: "Amiri Quran", "Amiri", "Scheherazade New", "Traditional Arabic", serif;
+  --f-quran: "KFGQPC Hafs", "Amiri Quran", "Amiri", "Scheherazade New", "Traditional Arabic", serif;
   --f-ui: "Readex Pro", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --qsize: 30px;
   --nav-h: 62px;
@@ -345,3 +345,19 @@ dialog::backdrop { background: rgb(0 0 0 / .4); }
 .qres .n { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; }
 .qres .sc { font-weight: 600; font-variant-numeric: tabular-nums; }
 .plan-meta { align-items: center; } .plan-meta .btn { flex: none; }
+
+/* ---------- Mushaf line layout: 15 printed lines per page ---------- */
+.mushaf.lines { --row: calc(var(--qsize) * 1.9); line-height: 1.2; text-align: initial; text-align-last: auto; padding: 2px 0; }
+.mushaf.lines .row { height: var(--row); display: flex; align-items: center; }
+.mushaf.lines .ln { justify-content: space-between; white-space: nowrap; }
+.mushaf.lines .ln.short { justify-content: center; gap: .32em; }
+.mushaf.lines.measuring .ln { justify-content: flex-start; gap: 0; }
+.mushaf.lines .ln > * { flex: none; }
+.mushaf.lines .w { padding: 0 .02em; }
+.mushaf.lines .vm { margin: 0 .08em; font-size: .7em; vertical-align: 0; }
+.mushaf.lines .sh-row { justify-content: center; }
+.mushaf.lines .sh-row .cartouche { margin: 0; width: 100%; max-width: none; height: calc(var(--row) * .86); display: grid; place-items: center; padding: 0 .6em; outline-offset: 2px; }
+.mushaf.lines .sh-row .ar { font-size: calc(var(--qsize) * .95); line-height: 1; }
+.mushaf.lines .bas-row { justify-content: center; font-size: var(--qsize); }
+.mushaf.lines .w.playing { background-image: linear-gradient(var(--gold-soft), var(--gold-soft)); background-repeat: no-repeat; background-position: 0 60%; background-size: 100% 1.1em; }
+.mushaf.opening { padding-block: calc(var(--qsize) * 1.2); }
