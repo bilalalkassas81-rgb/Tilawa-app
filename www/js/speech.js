@@ -15,9 +15,16 @@ export const speechReady = inClaude
   : Promise.resolve(speechSupport);
 export { isNative };
 
-export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, onError }) {
+export function createRecognizer({ lang = 'ar-SA', onPartial: partialCb, onFinal: finalCb, onState, onError }) {
   let want = false, state = 'idle', rec = null, lastPartial = '';
   const set = (s) => { state = s; onState && onState(s); };
+  // cut(): the app has kept the words heard so far in this phrase (the page is complete). Recognisers keep
+  // sending the whole phrase until it ends, so those first words are dropped from what is sent next.
+  let cutN = 0, lastRaw = '';
+  const words = (t) => (t || '').trim().split(/\s+/).filter(Boolean);
+  const strip = (t) => (cutN ? words(t).slice(cutN).join(' ') : t);
+  const onPartial = (t) => { lastRaw = t; partialCb(strip(t)); };
+  const onFinal = (t) => { const f = strip(t); cutN = 0; lastRaw = ''; if (f.trim()) finalCb(f); };
 
   async function startNative() {
     const ok = await NativeSR.available().catch(() => ({ available: false }));
@@ -29,16 +36,19 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
     }
     await NativeSR.removeAllListeners();
     // Android's recogniser hears one phrase at a time. It reports "stopped" at the end of speech and only
-    // then delivers the final text; on silence it ends with an error and sends no event at all.
-    // So: wait for the final text before restarting, and a watchdog restarts it whenever it has gone quiet.
+    // then delivers the final text (one more partialResults); on silence it ends with an error and sends nothing.
+    // So: commit the final text and listen again the moment it arrives (or shortly after "stopped" if it
+    // doesn't), and a watchdog restarts it whenever it has gone quiet.
     NativeSR.addListener('partialResults', (d) => {
       const t = (d.matches && d.matches[0]) || '';
       if (!t || t === lastCommitted) return; // the final copy of a phrase already committed
-      lastPartial = t; onPartial(t);
+      lastPartial = t;
+      if (ended) scheduleRestart(0); // this is the phrase's final text
+      else onPartial(t);
     });
     NativeSR.addListener('listeningState', (d) => {
-      if (d.status === 'started') set('listening');
-      if (d.status === 'stopped' && want) scheduleRestart(900);
+      if (d.status === 'started') { lastCommitted = ''; set('listening'); }
+      if (d.status === 'stopped' && want) { ended = true; scheduleRestart(400); }
     });
     await beginNative();
     fails = 0;
@@ -51,13 +61,18 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
       scheduleRestart(0);
     }, 1500);
   }
-  let watchdog = 0, restarting = false, lastCommitted = '', fails = 0;
+  let watchdog = 0, restarting = false, restartTimer = 0, ended = false, lastCommitted = '', fails = 0;
   function commitNative() {
     if (lastPartial) { lastCommitted = lastPartial; onFinal(lastPartial); lastPartial = ''; onPartial(''); }
   }
+  async function restartNative() {
+    restartTimer = 0; commitNative(); ended = false; cutN = 0;
+    if (want) await beginNative();
+    restarting = false;
+  }
   function scheduleRestart(delay) {
-    if (restarting) return; restarting = true;
-    setTimeout(async () => { commitNative(); if (want) await beginNative(); restarting = false; }, delay);
+    if (restarting) { if (!delay && restartTimer) { clearTimeout(restartTimer); restartNative(); } return; }
+    restarting = true; restartTimer = setTimeout(restartNative, delay);
   }
   async function beginNative() {
     try {
@@ -82,7 +97,7 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { want = false; onError && onError({ code: 'not_granted', message: 'Microphone permission was denied.' }); }
       else if (e.error === 'language-not-supported') { want = false; onError && onError({ code: 'unavailable', message: 'Arabic recognition is not supported in this browser.' }); }
     };
-    rec.onend = () => { onPartial(''); if (want) { try { rec.start(); } catch (_) { set('idle'); } } else set('idle'); };
+    rec.onend = () => { onPartial(''); cutN = 0; if (want) { try { rec.start(); } catch (_) { set('idle'); } } else set('idle'); };
     rec.start();
     set('starting');
   }
@@ -115,6 +130,7 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
   return {
     get active() { return want; },
     get state() { return state; },
+    cut() { cutN = words(lastRaw).length; },
     async start() {
       if (want) return; want = true;
       if (speechSupport === 'dictation') return startDictation();
@@ -128,7 +144,7 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
       want = false;
       if (speechSupport === 'dictation') { set('finishing'); await dictation.stop().catch(() => {}); return; }
       if (speechSupport === 'native') {
-        clearInterval(watchdog); watchdog = 0; restarting = false; set('finishing');
+        clearInterval(watchdog); watchdog = 0; clearTimeout(restartTimer); restartTimer = 0; restarting = false; set('finishing');
         // the plugin's stop() never answers on Android, so don't wait on it for more than a moment
         await Promise.race([NativeSR.stop().catch(() => {}), new Promise((r) => setTimeout(r, 300))]);
         await new Promise((r) => setTimeout(r, 700)); // let the last phrase arrive

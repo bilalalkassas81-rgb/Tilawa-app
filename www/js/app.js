@@ -58,6 +58,11 @@ const verseText = (s, v) => Q[s - 1][4][v - 1].join(' ');
 /* ---------------- navigation ---------------- */
 let screen = 'home';
 const stack = [];
+// Reopen the last passage; until the text and page table have loaded the reader shows "Loading…".
+function openSaved() {
+  if (!Q || !PAGES.length) return;
+  if (P.page) openPage(P.page); else if (P.s) openPassage(P.s, P.from, P.to); else openPage(1);
+}
 function go(name, push = true) {
   if (name === screen) return;
   if (push) stack.push(screen);
@@ -70,11 +75,25 @@ function go(name, push = true) {
   if (name === 'home') renderHome();
   if (name === 'progress') renderProgress();
   if (name === 'settings') renderSettings();
-  if (name === 'read' && !R.words.length && Q) { if (P.page) openPage(P.page); else if (P.s) openPassage(P.s, P.from, P.to); else openPage(1); }
+  if (name === 'read' && !R.words.length) openSaved();
   window.scrollTo({ top: 0 });
   if (name === 'read') requestAnimationFrame(fitPage);
 }
-$$('.nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
+// Leaving the reader from the bottom nav: a test in progress ends (scoring what was recited), and a
+// recitation in progress is saved, as turning the page does.
+let navBusy = false;
+async function navTo(name) {
+  if (navBusy) return;
+  if (screen === 'read' && name !== 'read') {
+    navBusy = true;
+    try {
+      if (T) { await endTest(true); if (T) abandonTest(); }
+      else if (R.finals.length || R.partial) { await finish({ silent: true }); resetSession(); }
+    } catch (e) {} finally { navBusy = false; }
+  }
+  go(name);
+}
+$$('.nav button').forEach((b) => b.addEventListener('click', () => navTo(b.dataset.go)));
 const AppP = plugin('App');
 // Leaving the app: release the microphone so nothing keeps running in the background.
 function pauseVoice() { stopRecite(); if (finder && finder.active) finder.stop(); }
@@ -249,6 +268,8 @@ function pageVerses(p) {
 
 function openVerse(s, v) { openPage(pageOf(s, v), s, v); }
 function openPage(p, fs, fv) {
+  if (!PAGES.length) return;
+  if (T && !inQuestion) abandonTest();
   p = Math.min(Math.max(1, p | 0), PAGES.length);
   R.page = p; R.verses = pageVerses(p);
   [R.s, R.from] = R.verses[0]; R.to = R.verses.filter((x) => x[0] === R.s).pop()[1];
@@ -257,6 +278,7 @@ function openPage(p, fs, fv) {
 }
 function openPassage(s, from, to, focus) {
   if (from == null && to == null) return openVerse(s, 1);
+  if (T && !inQuestion) abandonTest();
   const N = Q[s - 1][4].length;
   R.page = 0; R.s = s; R.from = Math.min(Math.max(1, from || 1), N); R.to = Math.min(Math.max(R.from, to || N), N);
   if (R.to - R.from > 300) R.to = R.from + 299;
@@ -340,7 +362,9 @@ function renderLines(frag, bm) {
       frag.append(h('div', { class: 'row sh-row' }, h('div', { class: 'cartouche' }, h('span', { class: 'ar' }, 'سُورَةُ ' + Q[s - 1][0]))));
       if (s !== 1 && s !== 9) frag.append(h('div', { class: 'row bas-row' }, BASMALA));
     }
-    const ln = h('div', { class: 'row ln' });
+    // A line that closes a surah (the next printed line opens a new one, or the Qur'an ends here) is centered when short.
+    const nx = li + 1 < L.line.length ? L.line[li + 1] : WORDS.total;
+    const ln = h('div', { class: 'row ln' + (nx >= WORDS.total || WORDS.surahStart.has(nx) ? ' send' : '') });
     for (let g = ws; g < we; g++) {
       const s = WORDS.s[g], v = WORDS.v[g], j = WORDS.j[g];
       const i = R.words.length;
@@ -351,36 +375,63 @@ function renderLines(frag, bm) {
     frag.append(ln);
   }
 }
-function fitLines(box, availW, availH) {
-  const rowEls = $$('.row', box); if (!rowEls.length) return;
-  const root = document.documentElement;
+/* Mushaf page sizing. One font size per viewport for pages 3–604, so turning pages never jumps.
+   REF_EM is the 95th-percentile natural width of a printed line in em (KFGQPC Hafs, word gaps of .33em),
+   measured once over all 604 pages; the rare wider lines are shrunk on their own row. */
+const REF_EM = 20.8, ROW_MAX = 1.9, ROW_MIN = 1.7, ROWS = 15, MIN_GAP = 0.3, FLOOR = 12, CAP = 40, SCROLL_CAP = 24;
+function fitLines(box, availW, availH, fixed) {
+  const root = document.documentElement, page = $('#page');
+  const lns = $$('.ln', box); if (!lns.length) return;
+  const opening = box.classList.contains('opening');
+  // Natural width of each line in em, measured at 20px with no spreading.
+  lns.forEach((ln) => (ln.style.fontSize = ''));
   root.style.setProperty('--qsize', '20px');
   box.classList.add('measuring');
-  const widths = $$('.ln', box).map((ln) => { let w = 0; for (const c of ln.children) w += c.getBoundingClientRect().width; return { ln, w: w + (ln.children.length - 1) * 6.6 }; });
+  const need = lns.map((ln) => { let w = 0; for (const c of ln.children) w += c.getBoundingClientRect().width; return w / 20 + (ln.children.length - 1) * MIN_GAP; });
   box.classList.remove('measuring');
-  const maxW = Math.max(...widths.map((x) => x.w), 1);
-  const opening = box.classList.contains('opening');
-  widths.forEach(({ ln, w }) => ln.classList.toggle('short', opening || w < maxW * 0.8));
-  const fw = (20 * availW) / maxW;
-  const fh = availH / (rowEls.length * 1.9);
-  const f = Math.max(12, Math.min(fw, fh, opening ? 34 : 40));
-  root.style.setProperty('--qsize', Math.floor(f * 10) / 10 + 'px');
+  // The standard size: limited by width and by the 15 rows' height; below FLOOR the page scrolls instead.
+  // Rows are 1.9em apart, closed up to 1.7em when the height would otherwise make the text smaller.
+  const fw = availW / REF_EM;
+  let rowEm = Math.max(ROW_MIN, Math.min(ROW_MAX, availH / (ROWS * Math.min(fw, CAP))));
+  const fh = availH / (ROWS * rowEm);
+  let f = fixed ? Math.min(fixed, fw) : Math.min(fw, CAP);
+  if (!fixed && fh < f) {
+    if (fh >= FLOOR) f = fh;
+    else { f = Math.max(Math.min(fw, SCROLL_CAP), Math.min(fw, FLOOR)); rowEm = ROW_MAX; } // too short (phone landscape): size by width and scroll
+  }
+  if (fixed) rowEm = ROW_MAX;
+  f = Math.floor(f * 10) / 10;
+  // Keep a printed page's proportions: when the text is narrower than the box, narrow the page and center it.
+  let w = availW;
+  if (f * REF_EM < availW - 1) { w = Math.ceil(f * REF_EM); page.style.maxWidth = page.offsetWidth - (box.clientWidth - 4) + w + 'px'; }
+  const stdH = ROWS * rowEm * f;
+  root.style.setProperty('--row-em', rowEm.toFixed(3));
+  box.style.height = stdH + 4 + 'px';
+  let q = f;
+  if (opening) q = Math.floor(Math.min(0.88 * w / Math.max(...need), stdH / (8 * rowEm + 2.4), f * 1.6) * 10) / 10;
+  root.style.setProperty('--qsize', q + 'px');
+  lns.forEach((ln, i) => {
+    const em = need[i];
+    ln.classList.toggle('short', opening || (ln.classList.contains('send') && em < 0.8 * (w / q)));
+    if (em * q > w) ln.style.fontSize = Math.floor((w / em) * 10) / 10 + 'px';
+  });
 }
 
 /* Fit the page's text to the screen, like a printed Mushaf page. */
 function fitPage() {
-  const box = $('#mushaf');
+  const box = $('#mushaf'), page = $('#page');
+  page.style.maxWidth = ''; box.style.height = '';
   const stacked = box.classList.contains('stacked');
-  if (!P.fit || stacked || screen !== 'read') { document.documentElement.style.setProperty('--qsize', P.size + 'px'); return; }
-  const page = $('#page');
+  const lines = box.classList.contains('lines');
+  if (screen !== 'read' || stacked || (!P.fit && !lines)) { document.documentElement.style.setProperty('--qsize', P.size + 'px'); return; }
   const top = page.getBoundingClientRect().top + window.scrollY;
   const dock = $('#dock').getBoundingClientRect();
   if (dock.height) document.documentElement.style.setProperty('--dock-h', Math.ceil(dock.height) + 'px');
-  const bottom = (dock.height ? dock.top : innerHeight) + window.scrollY - 10;
+  const bottom = (dock.height ? dock.top : innerHeight) + window.scrollY - 8;
   const chrome = page.offsetHeight - box.offsetHeight;
   const avail = bottom - top - chrome;
+  if (lines) { fitLines(box, box.clientWidth - 4, avail - 6, P.fit ? 0 : P.size); return; }
   if (avail < 150) { document.documentElement.style.setProperty('--qsize', P.size + 'px'); return; }
-  if (box.classList.contains('lines')) { fitLines(box, box.clientWidth - 4, avail - 8); return; }
   let lo = 13, hi = 44;
   for (let k = 0; k < 9; k++) {
     const mid = (lo + hi) / 2;
@@ -390,7 +441,11 @@ function fitPage() {
   document.documentElement.style.setProperty('--qsize', Math.floor(lo * 10) / 10 + 'px');
 }
 let fitT = 0;
-addEventListener('resize', () => { clearTimeout(fitT); fitT = setTimeout(fitPage, 150); });
+// Refit after the viewport settles (rotation on Android reports its new size late, sometimes only via visualViewport).
+const refit = () => { clearTimeout(fitT); fitT = setTimeout(() => requestAnimationFrame(fitPage), 150); };
+addEventListener('resize', refit);
+addEventListener('orientationchange', refit);
+if (window.visualViewport) visualViewport.addEventListener('resize', refit);
 document.fonts && document.fonts.ready.then(() => fitPage());
 
 function nextPassage() {
@@ -454,7 +509,7 @@ function pills(values, current, label, onPick) {
 }
 $('#r-view').addEventListener('click', () => {
   const size = h('input', { type: 'range', min: 18, max: 56, step: 1, value: P.size, id: 'v-size', disabled: P.fit && !P.tr && !P.translit ? true : null });
-  size.addEventListener('input', () => { P.size = +size.value; save(); document.documentElement.style.setProperty('--qsize', P.size + 'px'); });
+  size.addEventListener('input', () => { P.size = +size.value; save(); fitPage(); });
   const lang = h('select', { id: 'v-lang' }); LANGS.forEach(([c, n]) => lang.append(h('option', { value: c, selected: c === P.trLang }, n)));
   lang.addEventListener('change', () => { P.trLang = lang.value; save(); if (P.tr) keepState(renderPassage); });
   const body = h('div', { class: 'dlg-body' },
@@ -530,10 +585,23 @@ function resetSession() {
   update(true);
 }
 let lastCur = -1;
+// The words still being spoken become final now: the page is saved with them, and the recogniser drops them
+// from what it sends next, so they never reach the next page.
+function commitPartial() {
+  if (!R.partial) return;
+  R.finals.push(...tokens(R.partial, true)); R.partial = '';
+  if (rec && rec.cut) rec.cut();
+}
 function update(force) {
   if (!R.units) return;
-  const rs = R.finals.concat(tokens(R.partial, false));
-  const res = R.res = align(R.units, R.words.length, rs, R.manualWrong, R.hints, { free: !T });
+  if (R.carry && R.carry.units !== R.units) { if (R.page) R.finals.push(...R.carry.toks); R.carry = null; } // the page has turned
+  let rs = R.finals.concat(tokens(R.partial, false));
+  let res = R.res = align(R.units, R.words.length, rs, R.manualWrong, R.hints, { free: !T });
+  if (res.finished && R.partial && rec && rec.active) {
+    // the words being spoken complete the page: keep them now (unless the page was already complete without them)
+    const before = align(R.units, R.words.length, R.finals, R.manualWrong, R.hints, { free: !T });
+    if (!before.finished) { commitPartial(); rs = R.finals; res = R.res = align(R.units, R.words.length, rs, R.manualWrong, R.hints, { free: !T }); }
+  }
   const any = rs.length > 0;
   for (let i = 0; i < R.els.length; i++) {
     let c = res.cls[i];
@@ -589,7 +657,12 @@ $('#mic').addEventListener('click', async () => {
   rec = createRecognizer({
     lang: 'ar-SA',
     onPartial: (p) => { R.partial = p; update(); },
-    onFinal: (f) => { R.finals.push(...tokens(f, true)); R.partial = ''; update(); },
+    onFinal: (f) => {
+      // words heard after the page was completed (it turns by itself) belong to the next page
+      if (!T && R.page && R.res && R.res.finished) R.carry = { units: R.units, toks: ((R.carry && R.carry.toks) || []).concat(tokens(f, true)) };
+      else R.finals.push(...tokens(f, true));
+      R.partial = ''; update();
+    },
     onState: (s) => {
       const was = R.listening; R.listening = s === 'listening';
       if (R.listening && !was) R.started = Date.now();
@@ -632,23 +705,35 @@ document.addEventListener('keydown', (e) => {
   if (screen !== 'read' || R.mode !== 'recite' || e.target.closest('input, textarea, select, dialog')) return;
   if (e.code === 'Space') { e.preventDefault(); reveal(); }
 });
+// Arrow keys turn the page; the Mushaf reads right to left, so ArrowLeft is the next page.
+document.addEventListener('keydown', (e) => {
+  if (screen !== 'read' || dlg.open || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (e.target.closest && e.target.closest('input, textarea, select, dialog, [contenteditable]')) return;
+  const dir = e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0;
+  if (!dir || (dir > 0 ? $('#r-next') : $('#r-prev')).disabled) return;
+  e.preventDefault(); turn(dir);
+});
 
 // Turn the page; a recitation in progress is saved first, and the microphone keeps listening on the new page.
 let autoTurning = false;
 async function turn(dir) {
   const listening = !!(rec && rec.active);
-  if (R.finals.length) await finish({ silent: true });
+  // once the page is complete, words still being heard are the next page's: the recogniser sends them again there
+  if (R.res && R.res.finished) R.partial = '';
+  if (R.finals.length || R.partial) await finish({ silent: true });
+  R.partial = '';
   keepMic = listening;
   try { if (dir > 0) nextPassage(); else prevPassage(); } finally { keepMic = false; }
 }
 async function finish(opts = {}) {
+  commitPartial();
   if (!opts.silent) stopRecite();
   const res = align(R.units, R.words.length, R.finals, R.manualWrong, R.hints, { free: !T });
   const attempted = res.doneWords + res.list.filter((m) => m.kind === 'wrong' && !/w-fixed/.test(res.cls[m.i])).length;
   const acc = attempted ? Math.max(0, Math.round(((attempted - res.mistakes) / attempted) * 100)) : 0;
   // verses fully recited
   const verseDone = new Map();
-  R.words.forEach((w, i) => { const ok = /w-(done|fixed|missed)/.test(res.cls[i]); /* words only revealed as hints don't count */ const k = w.s + ':' + w.v; verseDone.set(k, (verseDone.get(k) ?? true) && ok); });
+  R.words.forEach((w, i) => { const ok = /w-(done|fixed)/.test(res.cls[i]); /* only words actually recited count: not skipped ones, nor hints */ const k = w.s + ':' + w.v; verseDone.set(k, (verseDone.get(k) ?? true) && ok); });
   const versesRecited = [...verseDone.values()].filter(Boolean).length;
   const ms = elapsed();
   const id = 'r' + Date.now();
@@ -824,7 +909,7 @@ function planVerses(p) {
 }
 function planStats(p) {
   const { list } = planVerses(p);
-  const done = (p.done.match(/1/g) || []).length, total = list.length, left = total - done;
+  const total = list.length, done = Math.min(total, (p.done.slice(0, total).match(/1/g) || []).length), left = total - done;
   const daysLeft = Math.max(1, Math.ceil((startOfDay(p.deadline) - startOfDay()) / DAY) + 1);
   const doneToday = p.day && p.day.d === today() ? p.day.n : 0;
   const target = left + doneToday > 0 ? Math.ceil((left + doneToday) / daysLeft) : 0;
@@ -850,10 +935,24 @@ function applyPlans(verseDone, hidden) {
   }
   return changed;
 }
+// Plans saved before the page table changed can hold a progress map of the wrong length: rebuild it,
+// keeping the number of verses done (the first N verses of the plan's current list).
+function migratePlans() {
+  let changed = false;
+  planCache.clear();
+  for (const p of db.plans) {
+    const n = planVerses(p).list.length;
+    if (typeof p.done !== 'string') p.done = '';
+    if (p.done.length === n) continue;
+    const k = Math.min(n, (p.done.match(/1/g) || []).length);
+    p.done = '1'.repeat(k) + '0'.repeat(n - k); changed = true;
+  }
+  if (changed) save();
+}
 function continuePlan(p) {
   const { list } = planVerses(p); const st = planStats(p);
   let i = p.done.indexOf('0');
-  if (i < 0) { toast('This plan is complete.'); return; }
+  if (i < 0 || i >= list.length) { toast('This plan is complete.'); return; }
   const want = Math.max(1, Math.min(st.target - st.doneToday > 0 ? st.target - st.doneToday : st.target, 20));
   const [s, v] = list[i]; let e = v;
   while (e - v + 1 < want && i + 1 < list.length && list[i + 1][0] === s && list[i + 1][1] === e + 1 && p.done[i + 1] === '0') { i++; e++; }
@@ -867,11 +966,11 @@ function planCard(p, compact) {
   const st = planStats(p);
   const pct = st.total ? Math.round((st.done / st.total) * 100) : 0;
   const deadline = new Date(p.deadline).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: new Date(p.deadline).getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined });
-  const todayTxt = st.complete ? 'Complete' : st.doneToday >= st.target ? `Today’s ${st.target} done ✓` : `Today: ${st.doneToday} of ${st.target} verses`;
+  const todayTxt = st.complete ? 'Complete' : st.doneToday >= st.target ? `Today’s ${st.target} done ✓` : `Today: ${st.doneToday.toLocaleString()} of ${st.target.toLocaleString()} verses`;
   return h('div', { class: 'plan' },
     h('div', { class: 'plan-top' },
       h('span', { class: 'plan-type ' + p.type }, PLAN_TYPES[p.type]),
-      h('span', { class: 'ttl' }, h('b', null, scopeLabel(p.scope) + (p.reverse ? ' (reverse)' : '')), h('small', null, `${st.done}/${st.total} verses · ${pct}% · by ${deadline}`)),
+      h('span', { class: 'ttl' }, h('b', null, scopeLabel(p.scope) + (p.reverse ? ' (reverse)' : '')), h('small', null, `${st.done.toLocaleString()}/${st.total.toLocaleString()} verses · ${pct}% · by ${deadline}`)),
     ),
     h('div', { class: 'bar-track' }, h('i', { style: `width:${pct}%` })),
     h('div', { class: 'plan-meta' },
@@ -969,7 +1068,18 @@ $('#p-memo-edit').addEventListener('click', () => editMemorized());
 /* ======================= TEST MODE ======================= */
 // Questions start at random verses inside the chosen surahs. The first words are shown as a cue,
 // the rest is hidden and scored by the same matcher as normal recitation.
-let T = null;
+let T = null, inQuestion = false;
+// The reader moved away from the current question (another passage opened): end the test quietly,
+// keeping the questions already answered, and restore the Memorize setting from before the test.
+function abandonTest() {
+  const t = T; if (!t) return;
+  T = null;
+  P.hide = t.prevHide; applyPrefs();
+  $('#test-bar').hidden = true;
+  db.history.forEach((x) => { if (x.testRun === undefined && x.t >= t.started) x.testRun = t.started; });
+  save();
+  toast(t.results.length ? `Test ended after ${t.results.length} of ${t.qs.length} questions.` : 'Test ended.');
+}
 function testSetup(presetSurahs) {
   const st = { scope: db.memo.surahs.length ? 'memo' : 'pick', pick: new Set(presetSurahs || []), count: 5, len: 2 };
   const pickBtn = h('div');
@@ -1012,7 +1122,8 @@ function showQuestion(keep) {
   const q = T.qs[T.i];
   P.hide = true; applyPrefs(); setMode('recite');
   keepMic = !!keep;
-  try { openPassage(q.s, q.v, q.e); } finally { keepMic = false; }
+  inQuestion = true;
+  try { openPassage(q.s, q.v, q.e); } finally { keepMic = false; inQuestion = false; }
   // cue: the first two words of the question stay visible (not counted as hints)
   setTimeout(() => { for (let i = 0; i < Math.min(2, R.words.length); i++) R.peeks.add(i); update(true); }, 0);
   $('#test-bar').hidden = false;
@@ -1026,15 +1137,25 @@ async function nextQuestion() {
   try {
     const q = T.qs[T.i];
     const listening = !!(rec && rec.active);
-    const ses = R.finals.length ? await finish({ silent: true, quiet: true, test: true }) : null;
+    const ses = R.finals.length || R.partial ? await finish({ silent: true, quiet: true, test: true }) : null;
+    if (!T) return;
     T.results.push(ses ? { ...q, acc: ses.acc, mistakes: ses.mistakes, hints: ses.hints, words: ses.words, total: ses.total, mist: ses.mist } : { ...q, skipped: true, acc: 0, mistakes: 0, hints: 0, words: 0, total: R.words.length, mist: [] });
     T.i++;
     if (T.i < T.qs.length) showQuestion(listening);
     else endTest();
   } finally { if (T) T.busy = false; }
 }
-function endTest(cancelled) {
-  if (!T) return;
+async function endTest(cancelled) {
+  if (!T || (cancelled && T.busy)) return;
+  // ending early: the question being answered is scored with what was recited so far
+  if (cancelled && T.i < T.qs.length && (R.finals.length || R.partial)) {
+    T.busy = true;
+    const q = T.qs[T.i];
+    try {
+      const ses = await finish({ silent: true, quiet: true, test: true });
+      T.results.push({ ...q, acc: ses.acc, mistakes: ses.mistakes, hints: ses.hints, words: ses.words, total: ses.total, mist: ses.mist });
+    } finally { T.busy = false; }
+  }
   stopRecite();
   const t = T; T = null;
   P.hide = t.prevHide; save(); applyPrefs(); update(true);
@@ -1216,7 +1337,10 @@ fetch('data/quran.json').then((r) => { if (!r.ok) throw new Error(); return r.js
   Q = data; OFFS = []; let o = 0; Q.forEach((s) => { OFFS.push(o); o += s[4].length; });
   R.s = P.s; R.from = P.from; R.to = P.to;
   return Promise.all([fetch('data/pages.json').then((r) => r.json()), fetch('data/lines.json').then((r) => r.json()), fetch('data/imlai.json').then((r) => r.json()).catch(() => null)])
-    .then(([pg, ln, im]) => { PAGES = pg; setupLines(ln, im); renderHome(); });
+    .then(([pg, ln, im]) => {
+      PAGES = pg; setupLines(ln, im); migratePlans(); renderHome();
+      if (screen === 'read' && !R.words.length) { openSaved(); requestAnimationFrame(fitPage); }
+    });
 }).catch(() => { $('#h-list').replaceChildren(h('li', { class: 'empty' }, 'The Qur’an text could not load. Close and reopen the app.')); });
 
 if ('serviceWorker' in navigator && !isNative && location.protocol === 'https:') {
