@@ -25,6 +25,11 @@ jobs:
           java-version: 21
           cache: gradle
 
+      - name: Test
+        run: |
+          sh tests/check-syntax.sh
+          node tests/match.test.mjs
+
       - name: Install and copy the web app into the Android project
         run: |
           npm ci

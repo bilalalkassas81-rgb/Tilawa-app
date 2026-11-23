@@ -3,7 +3,7 @@ import { createRecognizer, speechSupport, speechReady, inClaude, isNative, start
 import { db, save, today, logDaily, streak, exportJSON, importJSON, putRecording, getRecording, deleteRecording } from './store.js';
 import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr, BASMALA } from './meta.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 function h(tag, attrs, ...kids) {
@@ -62,6 +62,7 @@ function go(name, push = true) {
   if (name === screen) return;
   if (push) stack.push(screen);
   if (screen === 'read') { stopRecite(); }
+  if (screen === 'home' && finder && finder.active) finder.stop();
   screen = name;
   $$('.screen').forEach((s) => (s.hidden = s.dataset.screen !== name));
   $('#dock').hidden = name !== 'read';
@@ -71,9 +72,15 @@ function go(name, push = true) {
   if (name === 'settings') renderSettings();
   if (name === 'read' && !R.words.length && Q) { if (P.page) openPage(P.page); else if (P.s) openPassage(P.s, P.from, P.to); else openPage(1); }
   window.scrollTo({ top: 0 });
+  if (name === 'read') requestAnimationFrame(fitPage);
 }
 $$('.nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
 const AppP = plugin('App');
+// Leaving the app: release the microphone so nothing keeps running in the background.
+function pauseVoice() { stopRecite(); if (finder && finder.active) finder.stop(); }
+function resumeUi() { setState(); fitPage(); if (screen === 'home') renderHome(); }
+document.addEventListener('visibilitychange', () => (document.hidden ? pauseVoice() : resumeUi()));
+if (AppP) { AppP.addListener('pause', pauseVoice); AppP.addListener('resume', resumeUi); }
 if (AppP) AppP.addListener('backButton', () => {
   if (dlg.open) return closeDialog();
   if (stack.length) go(stack.pop(), false); else if (screen !== 'home') go('home', false); else AppP.exitApp();
@@ -98,7 +105,7 @@ function khatmDailyTarget() {
   const doneBeforeToday = khatmDone() - ((db.daily[today()] || {}).khatm || 0);
   return Math.ceil(Math.max(0, TOTAL_VERSES - doneBeforeToday) / left);
 }
-function nextKhatmVerse() { const m = db.goal.khatmMap || ''; const i = m.indexOf('0'); return i < 0 ? -1 : i; }
+function nextKhatmVerse() { const m = db.goal.khatmMap || ''; if (!m) return 0; const i = m.indexOf('0'); return i < 0 ? -1 : i; }
 
 function renderHome() {
   if (!Q) return;
@@ -177,8 +184,8 @@ async function renderSearch(q, ul) {
   if (m) {
     const s = +m[1]; if (s >= 1 && s <= 114) {
       const v = m[2] ? Math.min(+m[2], Q[s - 1][4].length) : 0;
-      ul.append(v ? verseItem(s, v) : surahItem(s));
-    }
+      ul.append(v && +m[2] <= Q[s - 1][4].length ? verseItem(s, v) : v ? h('li', { class: 'empty' }, `${Q[s - 1][1]} has ${Q[s - 1][4].length} verses.`) : surahItem(s));
+    } else ul.append(h('li', { class: 'empty' }, 'There are 114 surahs. Type a number from 1 to 114, or a reference like 2:255.'));
     return;
   }
   const ql = q.toLowerCase();
@@ -254,9 +261,11 @@ function openPassage(s, from, to, focus) {
   P.page = 0; P.s = R.s; P.from = R.from; P.to = R.to; save();
   showPassage(s, focus);
 }
+let keepMic = false;
 function showPassage(fs, fv) {
   if (screen !== 'read') go('read');
-  stopRecite(); stopAudio();
+  if (!keepMic) stopRecite();
+  stopAudio();
   renderPassage().then(() => {
     if (fv && R.page === 0 && fv > R.from) { const el = R.vEls.find((x) => +x.dataset.s === fs && +x.dataset.v === fv); el && el.scrollIntoView({ block: 'center' }); }
     else window.scrollTo({ top: 0 });
@@ -320,6 +329,7 @@ function fitPage() {
   const page = $('#page');
   const top = page.getBoundingClientRect().top + window.scrollY;
   const dock = $('#dock').getBoundingClientRect();
+  if (dock.height) document.documentElement.style.setProperty('--dock-h', Math.ceil(dock.height) + 'px');
   const bottom = (dock.height ? dock.top : innerHeight) + window.scrollY - 10;
   const chrome = page.offsetHeight - box.offsetHeight;
   const avail = bottom - top - chrome;
@@ -348,15 +358,15 @@ function prevPassage() {
   if (R.from > 1) openPassage(R.s, Math.max(1, R.from - len), R.from - 1);
   else if (R.s > 1) openVerse(R.s - 1, Q[R.s - 2][4].length);
 }
-$('#r-prev').addEventListener('click', prevPassage);
-$('#r-next').addEventListener('click', nextPassage);
+$('#r-prev').addEventListener('click', () => turn(-1));
+$('#r-next').addEventListener('click', () => turn(1));
 // Swipe like turning Mushaf pages: swipe right for the next page, left for the previous one.
 let sx = 0, sy = 0, st = 0;
 $('#page').addEventListener('touchstart', (e) => { const t = e.touches[0]; sx = t.clientX; sy = t.clientY; st = Date.now(); }, { passive: true });
 $('#page').addEventListener('touchend', (e) => {
   const t = e.changedTouches[0]; const dx = t.clientX - sx, dy = t.clientY - sy;
   if (Date.now() - st > 700 || Math.abs(dx) < 70 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
-  if (rec && rec.active) return;
+  turn(dx > 0 ? 1 : -1); return;
   if (dx > 0) nextPassage(); else prevPassage();
 }, { passive: true });
 
@@ -499,7 +509,10 @@ function update(force) {
   else heard.append(h('span', { class: 'note' }, micNote()));
   $('#b-finish').disabled = !R.finals.length;
   $('#b-reveal').disabled = res.finished;
-  if (res.finished && rec && rec.active) { rec.stop(); toast('Passage complete. Press Finish to see your results.'); }
+  if (res.finished && rec && rec.active && !autoTurning) {
+    if (R.page && R.page < PAGES.length) { autoTurning = true; setTimeout(() => { turn(1).finally(() => { autoTurning = false; }); }, 700); }
+    else { rec.stop(); toast('Passage complete. Press Finish to see your results.'); }
+  }
   setState();
 }
 function micNote() {
@@ -511,7 +524,7 @@ const fmt = (ms) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 
 const elapsed = () => R.elapsed + (R.listening && R.started ? Date.now() - R.started : 0);
 function renderMeta() {
   const r = R.res; if (!r) return;
-  $('#meta').textContent = `${r.doneWords}/${R.words.length} · ${r.mistakes} mistake${r.mistakes === 1 ? '' : 's'} · ${fmt(elapsed())}`;
+  $('#meta').textContent = `${r.doneWords}/${R.words.length} · ${r.mistakes} ✗`;
 }
 setInterval(() => { if (R.listening) renderMeta(); }, 1000);
 function setState(s) {
@@ -572,14 +585,22 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); reveal(); }
 });
 
-async function finish() {
-  stopRecite();
+// Turn the page; a recitation in progress is saved first, and the microphone keeps listening on the new page.
+let autoTurning = false;
+async function turn(dir) {
+  const listening = !!(rec && rec.active);
+  if (R.finals.length) await finish({ silent: true });
+  keepMic = listening;
+  try { if (dir > 0) nextPassage(); else prevPassage(); } finally { keepMic = false; }
+}
+async function finish(opts = {}) {
+  if (!opts.silent) stopRecite();
   const res = align(R.units, R.words.length, R.finals, R.manualWrong, R.hints);
   const attempted = res.doneWords + res.list.filter((m) => m.kind === 'wrong' && !/w-fixed/.test(res.cls[m.i])).length;
   const acc = attempted ? Math.max(0, Math.round(((attempted - res.mistakes) / attempted) * 100)) : 0;
   // verses fully recited
   const verseDone = new Map();
-  R.words.forEach((w, i) => { const ok = /w-(done|fixed|hint|missed)/.test(res.cls[i]); const k = w.s + ':' + w.v; verseDone.set(k, (verseDone.get(k) ?? true) && ok); });
+  R.words.forEach((w, i) => { const ok = /w-(done|fixed|missed)/.test(res.cls[i]); /* words only revealed as hints don't count */ const k = w.s + ':' + w.v; verseDone.set(k, (verseDone.get(k) ?? true) && ok); });
   const versesRecited = [...verseDone.values()].filter(Boolean).length;
   const ms = elapsed();
   const id = 'r' + Date.now();
@@ -588,7 +609,7 @@ async function finish() {
     hints: R.hints.size, acc, ms, voice: R.finals.some((t) => !t.manual), verses: versesRecited,
     mist: res.list.map((m) => ({ s: R.words[m.i].s, v: R.words[m.i].v, j: R.words[m.i].j, text: R.words[m.i].text, kind: m.kind })),
   };
-  if (R.recorder) { try { const blob = await R.recorder.stop(); if (blob && blob.size) { await putRecording(id, blob); session.rec = true; } } catch (e) {} R.recorder = null; }
+  if (R.recorder && !opts.silent) { try { const blob = await R.recorder.stop(); if (blob && blob.size) { await putRecording(id, blob); session.rec = true; } } catch (e) {} R.recorder = null; }
   db.history.unshift(session); if (db.history.length > 500) { db.history.pop(); }
   // khatm map
   if (db.goal.khatmDays && db.goal.khatmMap) {
@@ -599,6 +620,7 @@ async function finish() {
   }
   logDaily(versesRecited, res.doneWords, ms);
   save();
+  if (opts.silent) { toast(`Saved ${sessionTitle(session)}: ${acc}% · ${res.mistakes} mistake${res.mistakes === 1 ? '' : 's'}`); return; }
   showSummary(session, res);
 }
 function showSummary(ses, res) {
@@ -631,7 +653,8 @@ function mistakeList(items) {
 const audio = $('#audio');
 const A = { i: -1, ayahLeft: 1, rangeLeft: 1, playing: false }; // i = index into R.verses
 const reciter = () => RECITERS.find((r) => r[0] === P.reciter) || RECITERS[0];
-const initial = (ar) => ar.replace(/^(عبد|ال)/, '').trim()[0] || ar[0];
+// the reciter's family name, without "ال", e.g. العفاسي → ع
+const initial = (ar) => { const w = ar.replace(/[()]/g, '').trim().split(/\s+/); const last = (w[0] === 'الحصري' ? w[0] : w[w.length - 1]).replace(/^ال/, ''); return last[0] || ar[0]; };
 function speedLabel(x) { return x + '×'; }
 function playerSummary() {
   const rep = P.repeatAyah === 1 ? 'each verse once' : P.repeatAyah === 0 ? 'repeat each verse forever' : `each verse ×${P.repeatAyah}`;
@@ -721,7 +744,7 @@ function renderProgress() {
   if (!Q) return;
   const H = db.history;
   const words = H.reduce((a, x) => a + x.words, 0);
-  const avg = H.length ? Math.round(H.reduce((a, x) => a + x.acc, 0) / H.length) : null;
+  const avg = H.length ? Math.round(H.reduce((a, x) => a + (x.acc || 0), 0) / H.length) : null;
   const mins = Math.round(Object.values(db.daily).reduce((a, d) => a + (d.ms || 0), 0) / 60000);
   $('#p-stats').replaceChildren(...[['Day streak', streak()], ['Words recited', words.toLocaleString()], ['Avg accuracy', avg == null ? '—' : avg + '%'], ['Minutes', mins.toLocaleString()]]
     .map(([k, v]) => h('div', { class: 'stat' }, h('div', { class: 'k' }, k), h('div', { class: 'val' }, String(v)))));
@@ -771,7 +794,7 @@ function renderProgress() {
     const li = h('li', null,
       h('div', null, h('b', null, sessionTitle(x)),
         h('div', { class: 'ref' }, `${new Date(x.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · ${x.words}/${x.total} words · ${x.mistakes} mistakes · ${x.hints} hints · ${fmt(x.ms)}`)),
-      h('span', { class: 'acc' }, x.acc + '%'));
+      h('span', { class: 'acc' }, (x.acc || 0) + '%'));
     const acts = h('div', { class: 'acts' },
       h('button', { class: 'btn', onclick: () => { setMode('recite'); if (x.page) openPage(x.page); else openPassage(x.s, x.from, x.to); } }, 'Recite again'),
       x.mist && x.mist.length ? h('button', { class: 'btn', onclick: () => openDialog('Mistakes', h('div', { class: 'dlg-body' }, mistakeList(x.mist))) }, `Mistakes (${x.mist.length})`) : null,

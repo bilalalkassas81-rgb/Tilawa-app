@@ -13,13 +13,27 @@ const defaults = {
   daily: {},         // 'YYYY-MM-DD' -> {verses, words, ms}
 };
 
+// Merge saved data over the defaults, dropping anything of the wrong shape, so a damaged or old save can't break the app.
+const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+function sanitize(src, into) {
+  const out = into || {};
+  src = isObj(src) ? src : {};
+  for (const k of Object.keys(defaults)) {
+    const d = defaults[k], v = src[k];
+    if (Array.isArray(d)) out[k] = Array.isArray(v) ? v.filter(isObj) : [];
+    else if (d === null) out[k] = isObj(v) ? v : null;
+    else if (isObj(d)) {
+      const merged = Object.assign(structuredClone(d), isObj(v) ? v : {});
+      if (isObj(out[k])) { for (const x of Object.keys(out[k])) delete out[k][x]; Object.assign(out[k], merged); } else out[k] = merged; // keep the same object so live references stay valid
+    } else out[k] = v ?? d;
+  }
+  if (out.goal.khatmDays && !(out.goal.khatmStart > 0)) out.goal.khatmStart = Date.now();
+  if (out.goal.khatmDays && (typeof out.goal.khatmMap !== 'string' || out.goal.khatmMap.length !== 6236)) out.goal.khatmMap = '0'.repeat(6236);
+  return out;
+}
 let data;
 try { data = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { data = null; }
-data = data || {};
-for (const k of Object.keys(defaults)) {
-  if (data[k] == null) data[k] = structuredClone(defaults[k]);
-  else if (!Array.isArray(defaults[k]) && typeof defaults[k] === 'object') data[k] = Object.assign(structuredClone(defaults[k]), data[k]);
-}
+data = sanitize(data);
 export const db = data;
 export function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {} }
 
@@ -37,9 +51,9 @@ export function streak() {
 
 export function exportJSON() { return JSON.stringify(db); }
 export function importJSON(txt) {
-  const p = JSON.parse(txt);
-  if (!p || typeof p !== 'object' || !p.prefs) throw new Error('This is not a Tilawa backup.');
-  for (const k of Object.keys(defaults)) if (p[k] != null) db[k] = p[k];
+  let p; try { p = JSON.parse(txt); } catch (e) { throw new Error('That backup text is incomplete or damaged. Copy it again in full.'); }
+  if (!isObj(p) || !isObj(p.prefs)) throw new Error('This is not a Tilawa backup.');
+  sanitize(p, db);
   save();
 }
 

@@ -41,13 +41,17 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
       if (d.status === 'stopped' && want) scheduleRestart(900);
     });
     await beginNative();
+    fails = 0;
     watchdog = setInterval(async () => {
-      if (!want || restarting) return;
+      if (!want || restarting || document.hidden) return;
       const r = await NativeSR.isListening().catch(() => ({ listening: false }));
-      if (!r.listening) scheduleRestart(0);
+      if (r.listening) { fails = 0; return; }
+      // back off when restarts keep failing, so the phone's recogniser isn't hammered
+      if (++fails > 3 && fails % Math.min(8, fails - 2) !== 0) return;
+      scheduleRestart(0);
     }, 1500);
   }
-  let watchdog = 0, restarting = false, lastCommitted = '';
+  let watchdog = 0, restarting = false, lastCommitted = '', fails = 0;
   function commitNative() {
     if (lastPartial) { lastCommitted = lastPartial; onFinal(lastPartial); lastPartial = ''; onPartial(''); }
   }
@@ -124,10 +128,13 @@ export function createRecognizer({ lang = 'ar-SA', onPartial, onFinal, onState, 
       want = false;
       if (speechSupport === 'dictation') { set('finishing'); await dictation.stop().catch(() => {}); return; }
       if (speechSupport === 'native') {
-        clearInterval(watchdog); set('finishing');
-        await NativeSR.stop().catch(() => {});
+        clearInterval(watchdog); watchdog = 0; restarting = false; set('finishing');
+        // the plugin's stop() never answers on Android, so don't wait on it for more than a moment
+        await Promise.race([NativeSR.stop().catch(() => {}), new Promise((r) => setTimeout(r, 300))]);
         await new Promise((r) => setTimeout(r, 700)); // let the last phrase arrive
-        commitNative(); set('idle');
+        commitNative();
+        await NativeSR.removeAllListeners().catch(() => {});
+        set('idle');
       }
       else if (rec) { set('finishing'); try { rec.stop(); } catch (_) { set('idle'); } }
     },

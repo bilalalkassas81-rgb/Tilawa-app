@@ -22,64 +22,90 @@ function lev(a, b) {
 }
 const ratio = (a, b) => 1 - lev(a, b) / Math.max(a.length, b.length, 1);
 
+// A wrong conjunction or preposition glued to the front (واحد for أحد, فقال for قال) is a real mistake.
+const PREFIX = /^[وفبلك]/;
+function prefixOnly(a, b) { return a.length === b.length + 1 && PREFIX.test(a) && a.slice(1) === b; }
 export function sim(r, u) {
+  if (r.norm !== u.norm && (prefixOnly(r.norm, u.norm) || prefixOnly(u.norm, r.norm))) return 0.5;
   if (u.norm.length <= 2 || u.key.length <= 1) return (r.norm === u.norm || r.key === u.key) ? 1 : 0;
   return Math.max(ratio(r.key, u.key), ratio(r.norm, u.norm));
 }
 
 export function tokens(text, final, manual) {
-  return (text || '').replace(/[^ء-ٰٟٱ\s]/g, ' ').split(/\s+/).map(normalize).filter(Boolean)
+  return (text || '').replace(DIAC, '').replace(/[^ء-ٰٟٱ\s]/g, ' ').split(/\s+/).map(normalize).filter(Boolean)
     .map((norm) => ({ norm, key: skel(norm), final, manual: !!manual }));
 }
 
 /** Is this word a disjoined-letters opener (e.g. الٓمٓ) recited letter by letter? */
 export function isMuqattaat(word, verse, idx) { return verse <= 2 && idx === 0 && !/[ً-ْ]/.test(word); }
 
-/** Units are what the recogniser should hear, in order. */
+/** Units are what the recogniser should hear, in order.
+ *  Disjoined-letter openers (الٓمٓ) become one unit per letter name, and also accept the letters read as one word (الم).
+ *  The first word of a surah that is preceded by a basmala is flagged, so a recited basmala is not counted as a mistake. */
 export function buildUnits(words) {
   const units = [];
   words.forEach((w, i) => {
     const norm = normalize(w.text);
-    if (isMuqattaat(w.text, w.v, w.j)) for (const ch of norm) { const name = LETTER[ch] || ch; units.push({ w: i, norm: name, key: skel(name) }); }
-    else if (norm) units.push({ w: i, norm, key: skel(norm) });
+    const start = w.v === 1 && w.j === 0;
+    const bas = start && w.s !== 1 && w.s !== 9;
+    if (isMuqattaat(w.text, w.v, w.j)) {
+      const first = units.length, letters = [...norm];
+      letters.forEach((ch, k) => { const name = LETTER[ch] || ch; units.push({ w: i, norm: name, key: skel(name), start: start && k === 0, bas: bas && k === 0 }); });
+      units[first].alt = { norm, key: skel(norm), n: letters.length };
+    } else if (norm) units.push({ w: i, norm, key: skel(norm), start, bas });
   });
   return units;
 }
 
+const PREAMBLE = tokens('اعوذ بالله من الشيطان الرجيم بسم الله الرحمن الرحيم', true);
+const isPreamble = (r) => PREAMBLE.some((p) => p.norm === r.norm || (r.norm.length > 3 && sim(r, p) >= 0.85));
+
 /**
  * Align recognised tokens against expected units.
- * Returns per-word classes plus counters.
+ * Unit states: 0 pending, 1 ok, 2 skipped, 3 fixed (wrong then right), 4 soft skip (short word the recogniser often drops), 5 wrong then skipped.
  */
 export function align(units, wordCount, rec, manualWrong, hints) {
-  const st = new Uint8Array(units.length); // 0 pending, 1 ok, 2 missed, 3 fixed, 4 soft-skip
+  const st = new Uint8Array(units.length);
   const wrong = new Set(manualWrong);
   let ptr = 0;
   for (const r of rec) {
     if (ptr >= units.length) break;
+    const u0 = units[ptr];
     if (r.manual) { st[ptr] = wrong.has(ptr) ? 3 : 1; ptr++; continue; }
+    // ta'awwudh / basmala before the first verse of the passage or of a new surah
+    if ((ptr === 0 || u0.bas || u0.start) && isPreamble(r) && sim(r, u0) < 0.9) continue;
+    // the letters of an opener read as one word: الم, يس, حم ...
+    if (u0.alt && (r.norm === u0.alt.norm || r.key === u0.alt.key)) { for (let k = 0; k < u0.alt.n; k++) st[ptr + k] = wrong.has(ptr + k) ? 3 : 1; ptr += u0.alt.n; continue; }
+    // a word repeated from just before is a repetition, not a mistake
+    const sCur = sim(r, u0);
     let hit = -1;
     for (let k = 0; k <= 4 && ptr + k < units.length; k++) {
       const u = units[ptr + k];
-      if (k > 0 && u.norm.length < 3) continue;
-      if (sim(r, u) >= (k === 0 ? 0.55 : 0.8)) { hit = ptr + k; break; }
+      if (k > 0 && u.norm.length < 3 && r.norm !== u.norm) continue;
+      if ((k === 0 ? sCur : sim(r, u)) >= (k === 0 ? 0.67 : 0.8)) { hit = ptr + k; break; }
+    }
+    // a word repeated from just before is a repetition, unless the reader is stuck on a mistake and moving on
+    if (hit !== ptr && !(hit > ptr && wrong.has(ptr))) {
+      let rep = false;
+      for (let m = Math.max(0, ptr - 4); m < ptr; m++) { const sp = sim(r, units[m]); if (sp >= 0.85 && sp > sCur) { rep = true; break; } }
+      if (rep) continue;
     }
     if (hit >= 0) {
-      for (let m = ptr; m < hit; m++) if (!st[m]) st[m] = units[m].norm.length <= 2 ? 4 : 2;
+      for (let m = ptr; m < hit; m++) if (!st[m]) st[m] = wrong.has(m) ? 5 : units[m].norm.length <= 2 ? 4 : 2;
       st[hit] = wrong.has(hit) ? 3 : 1; ptr = hit + 1; continue;
     }
-    let rep = false;
-    for (let m = Math.max(0, ptr - 4); m < ptr; m++) if (sim(r, units[m]) >= 0.7) { rep = true; break; }
-    if (rep || ptr === 0) continue;
+    if (ptr === 0 && !r.final) continue;
     if (r.final) wrong.add(ptr);
   }
   const wSt = new Array(wordCount).fill(null);
   units.forEach((u, idx) => {
-    const s = st[idx], o = wSt[u.w] || (wSt[u.w] = { done: 0, total: 0, miss: 0, fix: 0, wrong: 0 });
+    const s = st[idx], o = wSt[u.w] || (wSt[u.w] = { done: 0, total: 0, miss: 0, fix: 0, wrong: 0, w5: 0 });
     o.total++;
     if (s === 1 || s === 4) o.done++;
     if (s === 2) o.miss++;
     if (s === 3) { o.fix++; o.done++; }
-    if (!s && wrong.has(idx)) o.wrong++;
+    if ((!s || s === 5) && wrong.has(idx)) o.wrong++;
+    if (s === 5) o.w5++;
   });
   const curW = ptr < units.length ? units[ptr].w : -1;
   const cls = new Array(wordCount).fill('');
@@ -92,7 +118,7 @@ export function align(units, wordCount, rec, manualWrong, hints) {
     else if (o.wrong) { c = 'w-wrong'; list.push({ i, kind: 'wrong' }); mistakes++; }
     else if (o.fix && o.done === o.total) { c = 'w-fixed'; list.push({ i, kind: 'wrong' }); mistakes++; }
     else if (o.done === o.total) c = hints.has(i) ? 'w-hint' : 'w-done';
-    if (o.done === o.total || o.miss) doneWords++;
+    if (o.done === o.total || o.miss || o.w5) doneWords++;
     if (i === curW) c += ' w-current';
     cls[i] = c.trim();
   }

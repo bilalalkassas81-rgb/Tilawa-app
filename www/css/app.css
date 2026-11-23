@@ -303,3 +303,4 @@ dialog::backdrop { background: rgb(0 0 0 / .4); }
 .status .l1 { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; }
 .status .meta { overflow: hidden; text-overflow: ellipsis; }
 .heard .note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.screen.reader { padding-bottom: calc(var(--nav-h) + var(--sab) + var(--dock-h, 140px) + 8px); }
