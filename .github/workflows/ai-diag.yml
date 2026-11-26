@@ -17,20 +17,14 @@ jobs:
         include:
           - name: app default
             models: ''
-            args: ''
-          - name: base q4 wasm
-            models: '[{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"wasm","dtype":"q4"}]'
-            args: ''
-          - name: tiny q8 wasm (Sharjeelbaig)
-            models: '[{"id":"Sharjeelbaig/whisper-tiny-ar-quran-onnx","device":"wasm","dtype":"q8"}]'
-            args: ''
-          - name: tiny int8 wasm (emadjumaah)
-            models: '[{"id":"emadjumaah/mishkat-whisper-tiny-ar-quran-onnx","device":"wasm","dtype":"int8"}]'
-            args: ''
-          - name: webgpu swiftshader
-            models: '[{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"webgpu","dtype":"q4"},{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"webgpu","dtype":{"encoder_model":"fp32","decoder_model_merged":"q4"}}]'
-            args: '--enable-unsafe-webgpu --use-webgpu-adapter=swiftshader --enable-features=Vulkan --use-angle=swiftshader'
-            channel: chromium
+          - name: tiny enc fp32 dec q8 (Sharjeelbaig)
+            models: '[{"id":"Sharjeelbaig/whisper-tiny-ar-quran-onnx","device":"wasm","dtype":{"encoder_model":"fp32","decoder_model_merged":"q8"}}]'
+          - name: tiny q4 (omartariq612)
+            models: '[{"id":"omartariq612/whisper-tiny-ar-quran-onnx","device":"wasm","dtype":"q4"}]'
+          - name: tiny q8 (omartariq612)
+            models: '[{"id":"omartariq612/whisper-tiny-ar-quran-onnx","device":"wasm","dtype":"q8"}]'
+          - name: base enc fp32 dec q8
+            models: '[{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"wasm","dtype":{"encoder_model":"fp32","decoder_model_merged":"q8"}}]'
     name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
@@ -79,3 +73,61 @@ jobs:
           ARGS: ${{ matrix.args }}
           CHANNEL: ${{ matrix.channel }}
         run: WAV=$PWD/audio/Husary_128kbps.wav SECONDS=150 node tests/e2e/ai-browser.cjs
+
+  android:
+    name: Android emulator (WebView)
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Recitation audio, played in the app as the microphone
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+          mkdir -p audio
+          for v in 1 2 3 4 5 6 7; do curl -sSfL -o audio/$(printf '001%03d' $v).mp3 https://everyayah.com/data/Alafasy_128kbps/$(printf '001%03d' $v).mp3; done
+          (cd audio && ls *.mp3 | sed 's/^/file /' > list.txt && ffmpeg -loglevel error -y -f concat -safe 0 -i list.txt -ac 1 -ar 48000 cat.wav)
+          ffmpeg -loglevel error -y -f lavfi -t 3 -i anullsrc=r=48000:cl=mono -i audio/cat.wav -f lavfi -t 30 -i anullsrc=r=48000:cl=mono \
+            -filter_complex '[0:a][1:a][2:a]concat=n=3:v=0:a=1' -ac 1 -ar 22050 -c:a pcm_s16le www/diag.wav
+          ls -la www/diag.wav
+
+      - name: Debug APK
+        run: |
+          npm ci
+          npx cap sync android
+          cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon -q
+          ls -la app/build/outputs/apk/debug/
+
+      - name: Playwright (Android WebView driver)
+        run: npm i --no-save --no-package-lock playwright@1.49.1
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: The app in the emulator with the real model
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          cores: 4
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none -no-snapshot
+          script: |
+            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell pm grant app.tilawa.quran android.permission.RECORD_AUDIO
+            adb shell dumpsys package com.google.android.webview | grep versionName | head -2 || true
+            ANDROID=1 FAKE_MIC=/diag.wav PHONE=1 SECONDS=180 node tests/e2e/ai-browser.cjs || true

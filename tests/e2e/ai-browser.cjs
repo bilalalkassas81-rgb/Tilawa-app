@@ -6,24 +6,37 @@ const { chromium } = require('playwright');
 
 // MODELS: a JSON array to use instead of AI_MODELS in www/js/ai.js; ARGS: extra Chromium switches (e.g. for WebGPU)
 const WAV = process.env.WAV, SECONDS = +(process.env.SECONDS || 150), URL = process.env.URL || 'http://localhost:8080/';
+// ANDROID=1: the app in an Android emulator's WebView instead (a debug build, already installed); FAKE_MIC=<url in the
+// app> then plays that recording as the microphone, since the emulator's own microphone hears nothing.
+const PKG = 'app.tilawa.quran';
 (async () => {
-  const args = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${WAV}`, '--autoplay-policy=no-user-gesture-required', ...(process.env.ARGS || '').split(' ').filter(Boolean)];
-  const browser = await chromium.launch({ args, ...(process.env.CHANNEL ? { channel: process.env.CHANNEL } : {}) });
-  const ctx = await browser.newContext();
+  let page, browser = null;
+  if (process.env.ANDROID) {
+    const { _android } = require('playwright');
+    const [device] = await _android.devices();
+    console.log('device', device.model(), device.serial());
+    await device.shell(`am force-stop ${PKG}`);
+    await device.shell(`am start -n ${PKG}/.MainActivity`);
+    const wv = await device.webView({ pkg: PKG }, { timeout: 60000 });
+    page = await wv.page();
+  } else {
+    const args = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${WAV}`, '--autoplay-policy=no-user-gesture-required', ...(process.env.ARGS || '').split(' ').filter(Boolean)];
+    browser = await chromium.launch({ args, ...(process.env.CHANNEL ? { channel: process.env.CHANNEL } : {}) });
+    page = await (await browser.newContext()).newPage();
+  }
   if (process.env.MODELS) {
-    await ctx.route('**/js/ai.js', async (route) => {
+    await page.route('**/js/ai.js', async (route) => {
       const r = await route.fetch();
       const body = (await r.text()).replace(/export const AI_MODELS = \[[\s\S]*?\n\];/, `export const AI_MODELS = ${process.env.MODELS};`);
       route.fulfill({ response: r, body });
     });
   }
-  const page = await ctx.newPage();
   const t0 = Date.now(); const ts = () => ((Date.now() - t0) / 1000).toFixed(1).padStart(6) + 's';
   page.on('console', (m) => console.log(ts(), 'page', m.type(), m.text().slice(0, 500)));
   page.on('pageerror', (e) => console.log(ts(), 'PAGEERROR', e.message));
   page.on('worker', (w) => w.on('console', (m) => console.log(ts(), 'worker', m.type(), m.text().slice(0, 500))));
   page.on('requestfailed', (r) => console.log(ts(), 'REQFAILED', r.url(), r.failure() && r.failure().errorText));
-  await page.addInitScript(() => {
+  await page.addInitScript((fake) => {
     localStorage.setItem('tilawa.app.v1', JSON.stringify({ prefs: { voice: 'phone', page: 1 } }));
     // time every transcription the app asks of the model worker
     const Base = window.Worker;
@@ -41,9 +54,36 @@ const WAV = process.env.WAV, SECONDS = +(process.env.SECONDS || 150), URL = proc
         return super.postMessage(m, tr);
       }
     };
-  });
-  await page.goto(URL);
-  await page.waitForTimeout(1500);
+    if (fake && navigator.mediaDevices) {
+      const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      window.__realMic = real;
+      navigator.mediaDevices.getUserMedia = async (c) => {
+        try { // the real permission path first (the WebView asks the app, the app asks Android)
+          const s = await real(c);
+          console.log('DIAG real mic', JSON.stringify(s.getAudioTracks().map((t) => [t.label, t.readyState, t.getSettings()])));
+          s.getTracks().forEach((t) => t.stop());
+        } catch (e) { console.log('DIAG real mic failed', e.name, e.message); }
+        const ctx = new AudioContext(); await ctx.resume();
+        const buf = await ctx.decodeAudioData(await (await fetch(fake)).arrayBuffer());
+        const src = ctx.createBufferSource(); src.buffer = buf; const d = ctx.createMediaStreamDestination(); src.connect(d); src.start();
+        console.log('DIAG fake mic playing', ctx.sampleRate, buf.duration.toFixed(1), ctx.state);
+        return d.stream;
+      };
+    }
+  }, process.env.FAKE_MIC || '');
+  if (process.env.ANDROID) await page.reload(); else await page.goto(URL);
+  await page.waitForTimeout(2500);
+  console.log(ts(), 'env', JSON.stringify(await page.evaluate(async () => ({ ua: navigator.userAgent, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory, isolated: self.crossOriginIsolated, sab: typeof SharedArrayBuffer, gpu: !!navigator.gpu, adapter: navigator.gpu ? !!(await navigator.gpu.requestAdapter().catch(() => null)) : false, worklet: typeof AudioWorkletNode, voice: document.querySelector('#s-ver') && document.querySelector('#s-ver').textContent }))));
+
+  // The phone engine first (PHONE=1): what tapping the mic does with the default setting
+  const snap = () => page.evaluate(() => ({ st: document.querySelector('#st').textContent, meta: document.querySelector('#meta').textContent, mic: document.querySelector('#mic').className, toast: document.querySelector('#toast').hidden ? '' : document.querySelector('#toast').textContent }));
+  if (process.env.PHONE) {
+    await page.click('nav [data-go="read"]'); await page.waitForTimeout(1000);
+    await page.click('#mic');
+    for (let i = 0; i < 8; i++) { await page.waitForTimeout(1000); console.log(ts(), 'phone engine:', JSON.stringify(await snap())); }
+    await page.click('#mic'); await page.waitForTimeout(2000);
+    console.log(ts(), 'phone engine stopped:', JSON.stringify(await snap()));
+  }
 
   // Settings > Voice engine > Qur'an AI model: downloads the model with a progress bar
   await page.click('nav [data-go="settings"]');
@@ -84,5 +124,5 @@ const WAV = process.env.WAV, SECONDS = +(process.env.SECONDS || 150), URL = proc
   console.log(`RESULT Al-Fatiha: best ${best.done}/29 words (green ${best.green}, red ${best.red}) at ${best.at}s; complete: ${fatihaDone ? fatihaDone.toFixed(0) + ' s after the mic was tapped' : 'no'}`);
   await page.click('#mic').catch(() => {});
   await page.waitForTimeout(3000);
-  await browser.close();
+  if (browser) await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });
