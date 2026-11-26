@@ -3,7 +3,7 @@ const KEY = 'tilawa.app.v1';
 const defaults = {
   prefs: {
     theme: 'system', size: 30, fit: true, page: 1, tr: false, trLang: 'en', translit: false, hide: false,
-    reciter: 'Alafasy_128kbps', speed: 1, repeatAyah: 1, repeatRange: 1, record: false,
+    reciter: 'Alafasy_128kbps', speed: 1, repeatAyah: 1, repeatRange: 1, record: false, voice: 'phone',
     reminder: '', s: 1, from: 1, to: 7,
   },
   goal: { type: 'verses', daily: 10, khatmDays: 0, khatmStart: 0, khatmPos: 0 },
