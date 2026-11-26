@@ -7,10 +7,13 @@ const DEFAULTS = {
   preroll: 0.3,      // audio kept from just before speech is detected
   onset: 0.09,       // this much voiced audio in a row starts a phrase
   endSilence: 0.7,   // a pause this long ends it
+  splitAfter: 5,     // once a phrase is this long, a shorter pause ends it too: Whisper often leaves out what follows a
+  shortPause: 0.35,  // pause inside a long clip (a whole verse), and shorter clips are transcribed sooner
   tail: 0.25,        // silence kept after the last word
   partialEvery: 1.0, // new audio before the phrase is transcribed again
   minSpeech: 0.25,   // less voiced audio than this is a click or a cough: never transcribed
   maxPhrase: 20,     // Whisper hears 30 s at most: a longer phrase is cut at a quiet point
+  maxClip: 28,       // phrases that end while the model is busy are sent together, up to this long
   minRms: 0.008, snr: 3, floorWindow: 4,
 };
 const AR = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/;
@@ -102,7 +105,7 @@ export function createStreamer({ transcribe, onPartial, onFinal, ...opts }) {
       return;
     }
     sil = v ? 0 : sil + 1;
-    if (sil >= F(o.endSilence)) {
+    if (sil >= F(frames.length >= F(o.splitAfter) ? o.shortPause : o.endSilence)) {
       finalize(frames.length - sil + F(o.tail));
       speaking = false; run = 0;
       const keep = F(o.preroll); frames = frames.slice(-keep); flags = flags.slice(-keep).fill(0); levels = levels.slice(-keep);
@@ -121,7 +124,17 @@ export function createStreamer({ transcribe, onPartial, onFinal, ...opts }) {
   function finalize(end) {
     const fl = flags.slice(0, end);
     if (count(fl) < F(o.minSpeech) && last.id !== id) return;
-    enqueue({ id, final: true, audio: join(frames.slice(0, end)), strip: 0 });
+    const audio = join(frames.slice(0, end));
+    // The model is still busy with an earlier clip and another phrase is already waiting: send them as one clip. Each
+    // run costs about the same however short the clip (Whisper always hears 30 s), so on a slow phone one clip per
+    // phrase would fall further and further behind the reader.
+    const prev = queue[queue.length - 1]; // only finals ever wait: a partial is sent only when nothing is busy
+    if (prev && prev.final && (prev.audio.length + audio.length) / RATE <= o.maxClip) {
+      const a = new Float32Array(prev.audio.length + audio.length); a.set(prev.audio); a.set(audio, prev.audio.length);
+      prev.audio = a; prev.ids.push(id);
+      return;
+    }
+    enqueue({ id, ids: [id], final: true, audio, strip: 0 });
   }
   function enqueue(job) { queue.push(job); next(); }
   function next() {
@@ -133,9 +146,10 @@ export function createStreamer({ transcribe, onPartial, onFinal, ...opts }) {
       if (!job.final) {
         if (t !== null && job.id === id) { last = { id: job.id, text: t, n: job.n }; onPartial(t); }
       } else {
-        if (t === null) t = last.id === job.id ? last.text : '';
+        const mine = job.ids.includes(last.id); // the latest partial shown was of this clip (always its first phrase)
+        if (t === null) t = mine ? last.text : '';
         if (job.strip) t = t.split(/\s+/).filter(Boolean).slice(job.strip).join(' ');
-        if (last.id === job.id) last = { id: -1, text: '', n: 0 };
+        if (mine) last = { id: -1, text: '', n: 0 };
         if (t) onFinal(t); else onPartial('');
       }
       next(); maybePartial();
@@ -154,7 +168,7 @@ export function createStreamer({ transcribe, onPartial, onFinal, ...opts }) {
     },
     cut() {
       if (!last.text) return;
-      const pending = (cur && cur.final && cur.id === last.id) ? cur : queue.find((j) => j.final && j.id === last.id);
+      const pending = (cur && cur.final && cur.ids.includes(last.id)) ? cur : queue.find((j) => j.final && j.ids.includes(last.id));
       if (pending) pending.strip = nwords(last.text); // the phrase has ended: its final text loses those words
       else if (speaking && last.id === id) {           // still speaking: drop the audio those words came from
         frames = frames.slice(last.n); flags = flags.slice(last.n); levels = levels.slice(last.n); id++; asked = 0;

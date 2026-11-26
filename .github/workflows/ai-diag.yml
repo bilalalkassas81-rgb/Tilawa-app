@@ -15,16 +15,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: app default
-            models: ''
-          - name: tiny enc fp32 dec q8 (Sharjeelbaig)
-            models: '[{"id":"Sharjeelbaig/whisper-tiny-ar-quran-onnx","device":"wasm","dtype":{"encoder_model":"fp32","decoder_model_merged":"q8"}}]'
-          - name: tiny q4 (omartariq612)
-            models: '[{"id":"omartariq612/whisper-tiny-ar-quran-onnx","device":"wasm","dtype":"q4"}]'
-          - name: tiny q8 (omartariq612)
-            models: '[{"id":"omartariq612/whisper-tiny-ar-quran-onnx","device":"wasm","dtype":"q8"}]'
-          - name: base enc fp32 dec q8
-            models: '[{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"wasm","dtype":{"encoder_model":"fp32","decoder_model_merged":"q8"}}]'
+          - name: desktop (app default)
+            ua: ''
+          - name: phone user agent (app default)
+            ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
     name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
@@ -61,17 +55,13 @@ jobs:
       - name: Alafasy
         continue-on-error: true
         env:
-          MODELS: ${{ matrix.models }}
-          ARGS: ${{ matrix.args }}
-          CHANNEL: ${{ matrix.channel }}
+          UA: ${{ matrix.ua }}
         run: WAV=$PWD/audio/Alafasy_128kbps.wav SECONDS=150 node tests/e2e/ai-browser.cjs
 
       - name: Husary
         continue-on-error: true
         env:
-          MODELS: ${{ matrix.models }}
-          ARGS: ${{ matrix.args }}
-          CHANNEL: ${{ matrix.channel }}
+          UA: ${{ matrix.ua }}
         run: WAV=$PWD/audio/Husary_128kbps.wav SECONDS=150 node tests/e2e/ai-browser.cjs
 
   android:
@@ -131,3 +121,4 @@ jobs:
             adb shell pm grant app.tilawa.quran android.permission.RECORD_AUDIO
             adb shell dumpsys package com.google.android.webview | grep versionName | head -2 || true
             ANDROID=1 FAKE_MIC=/diag.wav PHONE=1 SECONDS=180 node tests/e2e/ai-browser.cjs || true
+            ANDROID=1 FAKE_MIC=/diag.wav SECONDS=180 MODELS='[{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"wasm","dtype":"q8"}]' node tests/e2e/ai-browser.cjs || true

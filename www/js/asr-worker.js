@@ -69,10 +69,10 @@ async function load({ lib, models }) {
         // Some exports carry an old generation config without the language tokens: give them from the tokenizer.
         const g = p.model.generation_config || {}, ids = p.tokenizer.model.tokens_to_ids;
         if (!(g.lang_to_id && g.lang_to_id['<|ar|>'] != null)) x = { is_multilingual: true, lang_to_id: { '<|ar|>': ids.get('<|ar|>') }, task_to_id: { transcribe: ids.get('<|transcribe|>') }, no_timestamps_token_id: g.no_timestamps_token_id ?? ids.get('<|notimestamps|>') };
-        await run(p, new Float32Array(16000), x); // compiles the model now, and fails here rather than mid-recitation
+        // compiles the model now, and fails here rather than mid-recitation; its time is about that of every run
         const t = performance.now(); await run(p, new Float32Array(16000), x); ms = Math.round(performance.now() - t);
       })()]);
-      asr = p; extra = x; info = { device: c.device, model: c.id, dtype: c.dtype, ms, threads: env.backends.onnx.wasm.numThreads, isolated: !!self.crossOriginIsolated };
+      asr = p; extra = x; info = { device: c.device, model: c.id, dtype: c.dtype, ms };
       return;
     } catch (e) {
       gone = true; err = e; console.warn('Tilawa: could not use', c.id, 'on', c.device, e);

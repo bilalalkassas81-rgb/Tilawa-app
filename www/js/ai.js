@@ -1,23 +1,32 @@
-// Optional voice engine: Tarteel AI's Qur'an-trained Whisper model (tarteel-ai/whisper-base-ar-quran) run on this
-// device with transformers.js. The library and the model download once, on first use, and are cached for offline use.
+// Optional voice engine: Tarteel AI's Qur'an-trained Whisper models (tarteel-ai/whisper-base-ar-quran and
+// whisper-tiny-ar-quran) run on this device with transformers.js. The library and the model download once, on first
+// use, and are cached for offline use.
 import { createStreamer, createResampler, RATE } from './stream.js';
 
 // Pinned: sw.js caches this exact version, and transformers.js fetches its ONNX runtime files from the same folder.
 export const AI_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js';
-// ONNX exports of tarteel-ai/whisper-base-ar-quran, tried in order until one loads and runs. WebGPU entries are
-// skipped without a GPU adapter. dtype is one value or one per file (encoder_model, decoder_model_merged).
-export const AI_MODELS = [
-  { id: 'yaltaieh/whisper-base-ar-quran-onnx', device: 'webgpu', dtype: 'q4' },
+// ONNX exports, tried in order until one loads and runs. dtype is one value or one per file (encoder_model,
+// decoder_model_merged). Checked with real recitation in Chromium (tests/e2e): Whisper always hears a 30 s window, so
+// every run costs about the same however short the clip: on one desktop core (WebAssembly in a page runs on one thread)
+// about 3.5 s for base and 2.3 s for tiny, and about four times that in an Android emulator's WebView. Phones get the
+// tiny model, which follows nearly as well and keeps up. Exports whose encoder has quantized convolutions
+// (ConvInteger) do not run in the browser runtime. WebGPU (desktop only) runs the encoder at full precision.
+const BASE = [
+  { id: 'yaltaieh/whisper-base-ar-quran-onnx', device: 'webgpu', dtype: { encoder_model: 'fp32', decoder_model_merged: 'q4' } },
   { id: 'yaltaieh/whisper-base-ar-quran-onnx', device: 'wasm', dtype: 'q8' },
-  { id: 'yaltaieh/whisper-base-ar-quran-onnx', device: 'wasm', dtype: { encoder_model: 'q4', decoder_model_merged: 'bnb4' } },
   { id: 'Mustanad/whisper-base-ar-quran-onnx', device: 'wasm', dtype: 'q8' },
-  { id: 'Rayen0/whisper-base-ar-quran-onnx', device: 'wasm', dtype: 'q8' },
 ];
-export const AI_MB = 100; // shown before the first download: the model (about 75 MB) and the runtime
+const TINY = [
+  { id: 'Sharjeelbaig/whisper-tiny-ar-quran-onnx', device: 'wasm', dtype: { encoder_model: 'fp32', decoder_model_merged: 'q8' } },
+  { id: 'omartariq612/whisper-tiny-ar-quran-onnx', device: 'wasm', dtype: 'q4' },
+];
+const phone = typeof navigator === 'object' && (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || '')));
+export const AI_MODELS = phone ? [...TINY, ...BASE.filter((m) => m.device === 'wasm')] : [...BASE, ...TINY];
+export const AI_MB = phone ? 85 : 100; // shown before the first download: the model and the runtime (about 22 MB)
 
 export const aiSupported = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && typeof WebAssembly === 'object'
   && typeof Worker === 'function' && !!(window.AudioContext || window.webkitAudioContext);
-export const aiInfo = { device: '', model: '' };
+export const aiInfo = { device: '', model: '', ms: 0 };
 
 let worker = null, ready = null, loadCbs = [], jobs = new Map(), seq = 0, files = {}, crashCbs = new Set();
 let sessions = 0, idleT = 0;
@@ -32,7 +41,7 @@ function getWorker() {
       loadCbs.forEach((cb) => cb(msg, b ? a / b : 0));
     } else if (m.type === 'ready' || m.type === 'error') {
       const cbs = loadCbs; loadCbs = []; files = {};
-      if (m.type === 'ready') { Object.assign(aiInfo, { device: m.device, model: m.model }); cbs.forEach((cb) => cb(null, 1, null)); }
+      if (m.type === 'ready') { Object.assign(aiInfo, { device: m.device, model: m.model, ms: m.ms }); cbs.forEach((cb) => cb(null, 1, null)); }
       else cbs.forEach((cb) => cb(null, 0, m.message, m.kind));
       if (!sessions) idle(IDLE_MS);
     } else if (m.type === 'fatal') { // an error outside any call: only matters if something is waiting on the worker
@@ -48,7 +57,7 @@ function getWorker() {
 function reset() {
   clearTimeout(idleT); idleT = 0;
   if (worker) worker.terminate();
-  worker = null; ready = null; files = {}; aiInfo.device = ''; aiInfo.model = '';
+  worker = null; ready = null; files = {}; Object.assign(aiInfo, { device: '', model: '', ms: 0 });
 }
 // The worker died or threw outside a call. While loading, that is a failed load (the caller falls back to the phone
 // engine); with the model loaded, the sessions using it are told it stopped.
@@ -124,7 +133,9 @@ export function createAiEngine({ onPartial, onFinal, onError, onLoad }) {
   }
   async function openMic() {
     let s;
-    try { s = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+    // No echo cancellation or noise suppression: nothing is played back to cancel, and both are made for calls, where
+    // they flatten held, sung vowels (and on Android put the phone in call mode). Whisper copes with room noise itself.
+    try { s = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true } }); }
     catch (e) {
       throw Object.assign(new Error(e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'Microphone permission was denied.' : 'The microphone could not be opened.'), { code: e && e.name === 'NotAllowedError' ? 'not_granted' : 'mic' });
     }

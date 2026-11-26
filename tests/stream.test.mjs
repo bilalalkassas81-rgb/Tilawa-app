@@ -165,6 +165,32 @@ async function finish(st, m) { const p = st.flush(); for (let k = 0; k < 50; k++
   await finish(s3.st, m3);
   check(!s3.log.partials.some(Boolean) && !s3.log.finals.length, 'S8 nothing shown when every output is hallucinated', JSON.stringify(s3.log));
 }
+// S9 a long phrase also ends at a short pause (Whisper drops what follows a pause inside a long clip); a short phrase does not
+{
+  const m = fakeModel(); const { st, log } = setup(m);
+  await feed(st, m, cat(noise(0.5), speech(0, 12), noise(0.45), speech(12, 16), noise(1.2)));
+  await finish(st, m);
+  check(log.finals.length === 2 && log.finals[0] === WORDS.slice(0, 12).join(' ') && log.finals[1] === WORDS.slice(12, 16).join(' '), 'S9 a 0.45 s pause after 6 s of speech ends the phrase', JSON.stringify(log.finals));
+  const m2 = fakeModel(); const s2 = setup(m2);
+  await feed(s2.st, m2, cat(noise(0.5), speech(0, 4), noise(0.45), speech(4, 8), noise(1.2)));
+  await finish(s2.st, m2);
+  check(s2.log.finals.length === 1 && s2.log.finals[0] === WORDS.slice(0, 8).join(' '), 'S9 the same pause in a 2 s phrase does not', JSON.stringify(s2.log.finals));
+}
+// S10 a slow phone (each run takes 6 s) and a pause after every verse: phrases that end while the model is busy are
+// sent together, so it keeps up instead of falling further behind; every word arrives once, in order
+{
+  const m = fakeModel({ latency: 6 }); const { st, log } = setup(m);
+  const verses = [[0, 4], [4, 8], [8, 10], [10, 13], [13, 17], [17, 20], [20, 29]];
+  const audio = cat(noise(0.5), ...verses.map(([a, b]) => cat(speech(a, b), noise(0.9))), noise(1));
+  await feed(st, m, audio);
+  const end = audio.length / RATE, atEnd = log.finals.join(' ').split(' ').filter(Boolean).length;
+  await finish(st, m);
+  const finals = m.calls.filter((c) => c.final).length;
+  check(log.finals.join(' ') === WORDS.join(' '), 'S10 every word once and in order', JSON.stringify(log.finals));
+  check(finals < verses.length && m.calls.length <= Math.ceil(end / 6) + 2, 'S10 fewer runs than phrases', `${m.calls.length} runs (${finals} finals) for ${verses.length} phrases in ${end.toFixed(0)} s`);
+  check(atEnd >= 12, 'S10 the follow-along keeps up (one run per phrase would have 8 words here)', `${atEnd} of 29 after ${end.toFixed(1)} s`);
+  check(m.calls.every((c) => c.sec <= 28.01), 'S10 no clip longer than 28 s', Math.max(...m.calls.map((c) => c.sec)).toFixed(1));
+}
 
 // clean(): the hallucination filter on its own
 check(clean('', 2) === '' && clean('   ', 2) === '', 'C1 empty stays empty');

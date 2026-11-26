@@ -1298,7 +1298,7 @@ function renderSettings() {
   renderVoice();
   $('#s-reminder').value = P.reminder || '';
   $('#s-rem-note').textContent = plugin('LocalNotifications') ? 'A notification at this time each day.' : 'Daily notifications work in the Android app. Here, add the page to your home screen and set a phone alarm.';
-  $('#s-ver').textContent = `Version ${VERSION} · ${isNative ? 'Android app' : 'Web app'} · voice: ${useAi() ? `Qur’an AI${aiInfo.device ? ' (' + aiInfo.device + ')' : ''}` : speechSupport}`;
+  $('#s-ver').textContent = `Version ${VERSION} · ${isNative ? 'Android app' : 'Web app'} · voice: ${useAi() ? `Qur’an AI${aiInfo.device ? ` (${/tiny/.test(aiInfo.model) ? 'tiny' : 'base'}, ${aiInfo.device}, ${(aiInfo.ms / 1000).toFixed(1)} s)` : ''}` : speechSupport}`;
 }
 // Voice engine: the phone's own speech recognition, or the Qur'an AI model downloaded once and run on this device.
 function renderVoice() {

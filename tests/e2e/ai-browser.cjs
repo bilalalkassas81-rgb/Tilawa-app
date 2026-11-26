@@ -22,7 +22,8 @@ const PKG = 'app.tilawa.quran';
   } else {
     const args = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${WAV}`, '--autoplay-policy=no-user-gesture-required', ...(process.env.ARGS || '').split(' ').filter(Boolean)];
     browser = await chromium.launch({ args, ...(process.env.CHANNEL ? { channel: process.env.CHANNEL } : {}) });
-    page = await (await browser.newContext()).newPage();
+    // UA: e.g. a phone's, so the app picks what it would pick on a phone
+    page = await (await browser.newContext(process.env.UA ? { userAgent: process.env.UA } : {})).newPage();
   }
   if (process.env.MODELS) {
     await page.route('**/js/ai.js', async (route) => {
@@ -31,6 +32,7 @@ const PKG = 'app.tilawa.quran';
       route.fulfill({ response: r, body });
     });
   }
+  const tap = (sel) => page.$eval(sel, (el) => el.click()).catch((e) => console.log('tap failed', sel, e.message)); // as a finger would, whatever overlaps it
   const t0 = Date.now(); const ts = () => ((Date.now() - t0) / 1000).toFixed(1).padStart(6) + 's';
   page.on('console', (m) => console.log(ts(), 'page', m.type(), m.text().slice(0, 500)));
   page.on('pageerror', (e) => console.log(ts(), 'PAGEERROR', e.message));
@@ -78,15 +80,15 @@ const PKG = 'app.tilawa.quran';
   // The phone engine first (PHONE=1): what tapping the mic does with the default setting
   const snap = () => page.evaluate(() => ({ st: document.querySelector('#st').textContent, meta: document.querySelector('#meta').textContent, mic: document.querySelector('#mic').className, toast: document.querySelector('#toast').hidden ? '' : document.querySelector('#toast').textContent }));
   if (process.env.PHONE) {
-    await page.click('nav [data-go="read"]'); await page.waitForTimeout(1000);
-    await page.click('#mic');
+    await tap('nav [data-go="read"]'); await page.waitForTimeout(1000);
+    await tap('#mic');
     for (let i = 0; i < 8; i++) { await page.waitForTimeout(1000); console.log(ts(), 'phone engine:', JSON.stringify(await snap())); }
-    await page.click('#mic'); await page.waitForTimeout(2000);
+    await tap('#mic'); await page.waitForTimeout(2000);
     console.log(ts(), 'phone engine stopped:', JSON.stringify(await snap()));
   }
 
   // Settings > Voice engine > Qur'an AI model: downloads the model with a progress bar
-  await page.click('nav [data-go="settings"]');
+  await tap('nav [data-go="settings"]');
   await page.waitForTimeout(500);
   console.log(ts(), 'voice note:', await page.textContent('#s-voice-note'));
   const tl = Date.now();
@@ -100,10 +102,10 @@ const PKG = 'app.tilawa.quran';
   }
 
   // Recite Al-Fatiha
-  await page.click('nav [data-go="read"]');
+  await tap('nav [data-go="read"]');
   await page.waitForTimeout(1500);
   console.log(ts(), 'page words:', await page.evaluate(() => document.querySelectorAll('.w').length), 'meta:', await page.textContent('#meta'));
-  await page.click('#mic');
+  await tap('#mic');
   const tm = Date.now();
   let last = '', best = { done: 0, green: 0, red: 0 }, fatihaDone = 0;
   for (let i = 0; i < SECONDS; i++) {
@@ -122,7 +124,7 @@ const PKG = 'app.tilawa.quran';
     if (/\/(?!29 )\d+ /.test(s.meta) && fatihaDone) { console.log(ts(), 'the page turned after Al-Fatiha was complete'); break; }
   }
   console.log(`RESULT Al-Fatiha: best ${best.done}/29 words (green ${best.green}, red ${best.red}) at ${best.at}s; complete: ${fatihaDone ? fatihaDone.toFixed(0) + ' s after the mic was tapped' : 'no'}`);
-  await page.click('#mic').catch(() => {});
+  await tap('#mic');
   await page.waitForTimeout(3000);
   if (browser) await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });
