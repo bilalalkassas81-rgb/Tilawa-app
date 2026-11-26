@@ -14,7 +14,7 @@ const QI = JSON.parse(fs.readFileSync(here + '../../www/data/imlai.json'));
 const AUDIO = process.env.AUDIO_DIR;
 const EXTRA = (process.env.EXTRA_MODELS || '').split(/[\s,]+/).filter(Boolean);
 const SUFFIX = { fp32: '', fp16: '_fp16', q8: '_quantized', int8: '_int8', uint8: '_uint8', q4: '_q4', q4f16: '_q4f16', bnb4: '_bnb4' };
-const TRY = (process.env.DTYPES || 'q8,q4,fp32,bnb4').split(',');
+const TRY = (process.env.DTYPES || 'q8,q4').split(',');
 
 // Al-Fatiha as the app shows it on page 1
 const W = Q[0][4].flatMap((v, i) => v.map((t, j) => ({ text: t, s: 1, v: i + 1, j, plain: QI[0][i][j] })));
@@ -30,22 +30,23 @@ async function files(id) {
   return { top: top.map((f) => f.path), onnx: onnx.error ? [] : onnx.map((f) => `${f.path.replace('onnx/', '')} ${(f.size / 1e6).toFixed(1)}MB`) };
 }
 
-console.log('== Hugging Face search');
 const found = new Set();
-for (const q of ['whisper-base-ar-quran', 'whisper-tiny-ar-quran', 'whisper-small-ar-quran', 'ar-quran-onnx', 'quran onnx', 'tarteel']) {
+if (process.env.SEARCH) console.log('== Hugging Face search');
+if (process.env.SEARCH) for (const q of ['whisper-base-ar-quran', 'whisper-tiny-ar-quran', 'whisper-small-ar-quran', 'ar-quran-onnx', 'quran onnx', 'tarteel']) {
   const r = await api(`models?search=${encodeURIComponent(q)}&limit=50`);
   if (Array.isArray(r)) for (const m of r) { console.log(`  [${q}] ${m.id} ${(m.tags || []).filter((t) => /onnx|transformers.js|whisper/.test(t)).join(',')} dl=${m.downloads}`); found.add(m.id); }
 }
 const cands = [...new Set([...AI_MODELS.map((m) => m.id), ...EXTRA, ...[...found].filter((id) => /onnx/i.test(id))])];
-const avail = {};
+const avail = {}, test = new Set([...AI_MODELS.map((m) => m.id), ...EXTRA]);
 console.log('== File lists');
 for (const id of cands) {
   const f = await files(id);
   if (f.error) { console.log(`  ${id}: HTTP ${f.error}`); continue; }
   console.log(`  ${id}\n    top: ${f.top.join(' ')}\n    onnx: ${f.onnx.join(' | ')}`);
   const names = f.onnx.map((s) => s.split(' ')[0]);
-  avail[id] = Object.keys(SUFFIX).filter((d) => names.includes(`encoder_model${SUFFIX[d]}.onnx`) && names.includes(`decoder_model_merged${SUFFIX[d]}.onnx`));
-  console.log(`    dtypes with encoder + merged decoder: ${avail[id].join(', ') || 'none'}`);
+  const ok = Object.keys(SUFFIX).filter((d) => names.includes(`encoder_model${SUFFIX[d]}.onnx`) && names.includes(`decoder_model_merged${SUFFIX[d]}.onnx`));
+  console.log(`    dtypes with encoder + merged decoder: ${ok.join(', ') || 'none'}`);
+  if (test.has(id)) avail[id] = ok;
 }
 if (!AUDIO) process.exit(0);
 

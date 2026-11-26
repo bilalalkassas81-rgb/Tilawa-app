@@ -10,7 +10,7 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,15 +47,8 @@ jobs:
       - name: Models on Hugging Face, and what each transcribes (Node)
         env:
           AUDIO_DIR: audio/Alafasy_128kbps
-          EXTRA_MODELS: omartariq612/whisper-tiny-ar-quran-onnx onnx-community/whisper-base onnx-community/whisper-tiny
+          EXTRA_MODELS: omartariq612/whisper-tiny-ar-quran-onnx
         run: node tests/e2e/model-check.mjs 2>&1 | grep -v 'onnxruntime.*W:' || true
-
-      - name: Second reciter (Node)
-        env:
-          AUDIO_DIR: audio/Husary_128kbps
-          DTYPES: q8
-          STREAM_MODELS: 1
-        run: node tests/e2e/model-check.mjs 2>&1 | grep -v 'onnxruntime.*W:' | sed -n '/== Audio/,$p' || true
 
       - name: Serve the app
         run: |
@@ -76,3 +69,10 @@ jobs:
         continue-on-error: true
         run: |
           WAV=$PWD/audio/Alafasy_128kbps-quiet.wav SECONDS=150 node tests/e2e/ai-browser.cjs
+
+      - name: Second reciter (Node)
+        env:
+          AUDIO_DIR: audio/Husary_128kbps
+          DTYPES: q8
+          STREAM_MODELS: 1
+        run: node tests/e2e/model-check.mjs 2>&1 | grep -v 'onnxruntime.*W:' | sed -n '/== Audio/,$p' || true
