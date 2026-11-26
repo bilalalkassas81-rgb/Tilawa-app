@@ -19,7 +19,7 @@ jobs:
 
       - name: Recitation audio (EveryAyah, Al-Fatiha)
         run: |
-          sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1 || true
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
           mkdir -p audio
           for r in Alafasy_128kbps Husary_128kbps; do
             mkdir -p audio/$r
