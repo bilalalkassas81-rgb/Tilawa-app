@@ -34,19 +34,35 @@ export function clean(text, seconds) {
   return w.join(' ');
 }
 
-/** Box-filter resampler for microphone blocks at the device rate; keeps its place between blocks. */
+/** Resampler for microphone blocks at the device rate, keeping its place between blocks. A windowed-sinc low-pass
+ *  (Blackman, cut-off just under the new Nyquist) runs first, so fricatives above 8 kHz do not fold back as noise. */
 export function createResampler(from, to = RATE) {
   if (from === to) return (x) => Float32Array.from(x);
-  const step = from / to;
-  let seen = 0, k = 0, acc = 0, cnt = 0;
-  return (x) => {
-    const out = new Float32Array(Math.ceil(x.length / step) + 1); let n = 0;
-    for (let i = 0; i < x.length; i++) {
-      acc += x[i]; cnt++;
-      if (seen + i + 1 >= (k + 1) * step) { out[n++] = acc / cnt; acc = 0; cnt = 0; k++; }
+  const step = from / to, fc = 0.45 / step, K = Math.ceil(16 * step), P = 64;
+  const table = Array.from({ length: P }, (_, p) => { // taps for each fractional position of the output sample
+    const h = new Float32Array(2 * K); let sum = 0;
+    for (let i = 0; i < 2 * K; i++) {
+      const d = i - K + 1 - p / P, x = Math.PI * (d / K + 1); // x: 0..2π across the window
+      const w = 0.42 - 0.5 * Math.cos(x) + 0.08 * Math.cos(2 * x);
+      sum += h[i] = (d ? Math.sin(2 * Math.PI * fc * d) / (Math.PI * d) : 2 * fc) * w;
     }
-    seen += x.length;
-    return out.subarray(0, n);
+    return h.map((v) => v / sum);
+  });
+  let buf = new Float32Array(0), base = 0, k = 0; // base: stream index of buf[0]; k: next output sample
+  return (x) => {
+    const b = new Float32Array(buf.length + x.length); b.set(buf); b.set(x, buf.length); buf = b;
+    const out = [];
+    for (;;) {
+      const t = k * step, n0 = Math.floor(t);
+      if (n0 + K >= base + buf.length) break; // needs K samples ahead
+      const h = table[Math.floor((t - n0) * P)], s0 = n0 - K + 1 - base;
+      let acc = 0;
+      for (let i = Math.max(0, -s0); i < 2 * K; i++) acc += buf[s0 + i] * h[i];
+      out.push(acc); k++;
+    }
+    const drop = Math.floor(k * step) - K + 1 - base;
+    if (drop > 0) { buf = buf.slice(drop); base += drop; }
+    return Float32Array.from(out);
   };
 }
 

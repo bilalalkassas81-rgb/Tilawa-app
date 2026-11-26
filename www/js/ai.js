@@ -20,6 +20,7 @@ export const aiSupported = () => !!(navigator.mediaDevices && navigator.mediaDev
 export const aiInfo = { device: '', model: '' };
 
 let worker = null, ready = null, loadCbs = [], jobs = new Map(), seq = 0, files = {}, crashCbs = new Set();
+let sessions = 0, idleT = 0;
 function getWorker() {
   if (worker) return worker;
   worker = new Worker(new URL('./asr-worker.js', import.meta.url), { type: 'module' });
@@ -32,8 +33,9 @@ function getWorker() {
     } else if (m.type === 'ready' || m.type === 'error') {
       const cbs = loadCbs; loadCbs = []; files = {};
       if (m.type === 'ready') { Object.assign(aiInfo, { device: m.device, model: m.model }); cbs.forEach((cb) => cb(null, 1, null)); }
-      else cbs.forEach((cb) => cb(null, 0, m.message));
-    } else if (m.type === 'fatal') { // only matters if something is waiting on the worker
+      else cbs.forEach((cb) => cb(null, 0, m.message, m.kind));
+      if (!sessions) idle(IDLE_MS);
+    } else if (m.type === 'fatal') { // an error outside any call: only matters if something is waiting on the worker
       if (loadCbs.length || jobs.size) crash(new Error(m.message)); else console.warn('Tilawa: Qur’an model worker:', m.message);
     } else if (m.type === 'result') {
       const j = jobs.get(m.id); jobs.delete(m.id);
@@ -43,26 +45,41 @@ function getWorker() {
   worker.onerror = (e) => { e.preventDefault && e.preventDefault(); crash(new Error((e && e.message) || 'The Qur’an model stopped.')); };
   return worker;
 }
-function crash(err) {
+function reset() {
+  clearTimeout(idleT); idleT = 0;
   if (worker) worker.terminate();
-  worker = null; ready = null; files = {}; aiInfo.device = '';
-  const cbs = loadCbs; loadCbs = []; cbs.forEach((cb) => cb(null, 0, err.message));
-  jobs.forEach((j) => j.rej(err)); jobs.clear();
-  crashCbs.forEach((cb) => cb(err));
+  worker = null; ready = null; files = {}; aiInfo.device = ''; aiInfo.model = '';
 }
+// The worker died or threw outside a call. While loading, that is a failed load (the caller falls back to the phone
+// engine); with the model loaded, the sessions using it are told it stopped.
+function crash(err) {
+  const cbs = loadCbs; loadCbs = [];
+  reset();
+  jobs.forEach((j) => j.rej(err)); jobs.clear();
+  if (cbs.length) cbs.forEach((cb) => cb(null, 0, err.message, 'run'));
+  else crashCbs.forEach((cb) => cb(err));
+}
+// The model takes hundreds of MB: let it go when no session has used it for a while.
+const IDLE_MS = 10 * 60000;
+function idle(ms) {
+  clearTimeout(idleT);
+  idleT = setTimeout(() => { idleT = 0; if (!sessions && !loadCbs.length && !jobs.size) reset(); }, ms);
+}
+/** Free the model now (the setting is back on the phone engine) or after `ms` (the app is in the background). Never during a session. */
+export function unloadModel(ms = 0) { if (!sessions && worker) idle(ms); }
 
 /** Download (once) and load the model. onProgress(message, fraction) while it downloads. */
 export function loadModel(onProgress) {
   if (!ready) {
     ready = new Promise((res, rej) => {
-      loadCbs.push((msg, frac, err) => { if (msg === null) (err ? rej(new Error(err)) : res(aiInfo)); });
+      loadCbs.push((msg, frac, err, kind) => { if (msg === null) (err ? rej(Object.assign(new Error(err), { kind })) : res(aiInfo)); });
       getWorker().postMessage({ type: 'load', lib: AI_LIB, models: AI_MODELS });
     }).catch((e) => {
-      if (worker) worker.terminate(); worker = null; ready = null;
+      reset();
       const offline = typeof navigator.onLine === 'boolean' && !navigator.onLine;
       console.warn('Tilawa: Qur’an model not loaded:', e);
       throw Object.assign(new Error(offline ? 'The Qur’an AI model needs an internet connection the first time, to download.'
-        : /webassembly|wasm|memory|webgpu|backend/i.test(e.message) ? 'The Qur’an AI model could not run on this device.'
+        : e.kind === 'run' ? 'The Qur’an AI model could not run on this device.'
         : 'The Qur’an AI model could not be downloaded. Check your internet connection.'), { code: 'model' });
     });
   }
@@ -95,21 +112,24 @@ function transcribe(audio) {
 /** The recogniser for speech.js: the same partial/final contract as the phone engines. */
 export function createAiEngine({ onPartial, onFinal, onError, onLoad }) {
   const AC = window.AudioContext || window.webkitAudioContext;
-  let ctx = null, stream = null, nodes = [], streamer = null, stopped = false;
+  let ctx = null, stream = null, nodes = [], streamer = null, stopped = false, counted = false;
   const onCrash = () => { if (!stopped && onError) onError({ code: 'model', message: 'The Qur’an AI model stopped. Tap the microphone to continue.' }); };
   function release() {
     stopped = true; crashCbs.delete(onCrash);
+    if (counted) { counted = false; if (!--sessions) idle(IDLE_MS); }
     nodes.forEach((n) => { try { n.disconnect(); } catch (_) {} }); nodes = [];
     if (stream) stream.getTracks().forEach((t) => t.stop());
     if (ctx) ctx.close().catch(() => {});
     ctx = null; stream = null;
   }
   async function openMic() {
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+    let s;
+    try { s = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
     catch (e) {
       throw Object.assign(new Error(e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'Microphone permission was denied.' : 'The microphone could not be opened.'), { code: e && e.name === 'NotAllowedError' ? 'not_granted' : 'mic' });
     }
-    if (stopped) return;
+    if (stopped) { s.getTracks().forEach((t) => t.stop()); return false; } // stopped while the permission prompt was open
+    stream = s;
     let src;
     try { src = ctx.createMediaStreamSource(stream); }
     catch (_) { ctx.close().catch(() => {}); ctx = new AC(); src = ctx.createMediaStreamSource(stream); } // this browser can't resample the mic itself
@@ -118,6 +138,7 @@ export function createAiEngine({ onPartial, onFinal, onError, onLoad }) {
     let node;
     try {
       await ctx.audioWorklet.addModule(new URL('./mic-worklet.js', import.meta.url));
+      if (stopped) return false; // release() has already stopped the stream and closed the context
       node = new AudioWorkletNode(ctx, 'tilawa-mic'); node.port.onmessage = (e) => feed(e.data);
     } catch (_) {
       node = ctx.createScriptProcessor(4096, 1, 1); node.onaudioprocess = (e) => feed(Float32Array.from(e.inputBuffer.getChannelData(0)));
@@ -125,20 +146,24 @@ export function createAiEngine({ onPartial, onFinal, onError, onLoad }) {
     const mute = ctx.createGain(); mute.gain.value = 0; // keeps the graph running without playing the mic back
     src.connect(node); node.connect(mute); mute.connect(ctx.destination);
     nodes = [src, node, mute];
-    if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
     stream.getAudioTracks().forEach((t) => (t.onended = () => { if (!stopped && onError) onError({ code: 'mic', message: 'The microphone was turned off.' }); }));
+    if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+    return !stopped;
   }
   return {
-    get stream() { return stream; },
+    get stream() { return stopped ? null : stream; },
+    /** Resolves true once listening, false if stop() came first. */
     async start() {
       // made inside the tap, before anything is awaited, so the browser lets it run
       try { ctx = new AC({ sampleRate: RATE }); } catch (_) { ctx = new AC(); }
       ctx.resume().catch(() => {});
       streamer = createStreamer({ transcribe, onPartial, onFinal });
-      crashCbs.add(onCrash);
+      sessions++; counted = true; clearTimeout(idleT); idleT = 0;
       try {
         await loadModel(onLoad);
-        if (!stopped) await openMic();
+        if (stopped) return false;
+        crashCbs.add(onCrash); // from here a dead worker ends the session; before, it is a failed load
+        return await openMic();
       } catch (e) { release(); throw e; }
     },
     cut() { streamer && streamer.cut(); },

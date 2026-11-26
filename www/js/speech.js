@@ -137,8 +137,7 @@ export function createRecognizer({ lang = 'ar-SA', engine = 'phone', onPartial: 
       onError: (e) => { if (!want) return; want = false; onError && onError(e); const a = ai; a && a.stop().then(() => { if (ai === a && !want) set('idle'); }); },
     });
     set('starting');
-    await ai.start();
-    if (want) set('listening');
+    if ((await ai.start()) && want) set('listening'); // false: stopped before it was listening
   }
 
   return {

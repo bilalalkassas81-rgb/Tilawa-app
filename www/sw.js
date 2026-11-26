@@ -1,6 +1,6 @@
 // Offline support: app shell + Qur'an text are cached on install; translations and audio are cached as you use them.
 // The Qur'an AI engine's library is cached on first use (its model files are cached by the library itself).
-const VERSION = 'tilawa-v1.5.0';
+const VERSION = 'tilawa-v1.6.0';
 const KEEP = [VERSION, 'tilawa-audio', 'tilawa-ai', 'transformers-cache'];
 const SHELL = ['./', 'index.html', 'css/app.css', 'css/fonts.css', 'js/app.js', 'js/match.js', 'js/speech.js', 'js/store.js', 'js/meta.js',
   'js/ai.js', 'js/stream.js', 'js/asr-worker.js', 'js/mic-worklet.js',

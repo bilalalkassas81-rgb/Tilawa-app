@@ -181,9 +181,17 @@ check(clean(WORDS.join(' '), 1) === null && clean(WORDS.slice(0, 8).join(' '), 3
   const x = Float32Array.from({ length: 48000 }, (_, n) => Math.sin((2 * Math.PI * 440 * n) / 48000));
   const parts = []; for (let i = 0; i < x.length; i += 997) parts.push(rs(x.subarray(i, i + 997)));
   const y = cat(...parts); let zc = 0; for (let i = 1; i < y.length; i++) if ((y[i - 1] < 0) !== (y[i] < 0)) zc++;
-  check(Math.abs(y.length - 16000) <= 1 && Math.abs(zc / 2 - 440) <= 2, 'R1 48 kHz → 16 kHz', `${y.length} samples, ${zc / 2} Hz`);
+  // the low-pass needs a few samples of look-ahead, so the output lags by about a millisecond
+  check(Math.abs(y.length - 16000) <= 20 && Math.abs(zc / 2 - 440) <= 2, 'R1 48 kHz → 16 kHz', `${y.length} samples, ${zc / 2} Hz`);
   const r44 = createResampler(44100); const z = r44(new Float32Array(44100));
-  check(Math.abs(z.length - 16000) <= 1, 'R2 44.1 kHz → 16 kHz', z.length + ' samples');
+  check(Math.abs(z.length - 16000) <= 20, 'R2 44.1 kHz → 16 kHz', z.length + ' samples');
+  const level = (a) => Math.sqrt(a.reduce((s, v) => s + v * v, 0) / a.length);
+  for (const [rate, f, want, name] of [[48000, 440, (db) => db > -0.5, 'R3 440 Hz passes'], [48000, 10000, (db) => db < -20, 'R4 10 kHz removed (would alias to 6 kHz)'], [44100, 11000, (db) => db < -20, 'R5 11 kHz at 44.1 kHz removed']]) {
+    const tone = Float32Array.from({ length: rate }, (_, n) => Math.sin((2 * Math.PI * f * n) / rate));
+    const rs2 = createResampler(rate); const parts2 = []; for (let i = 0; i < tone.length; i += 1024) parts2.push(rs2(tone.subarray(i, i + 1024)));
+    const o = cat(...parts2).subarray(200); const db = 20 * Math.log10(level(o) / level(tone));
+    check(want(db), name, db.toFixed(1) + ' dB');
+  }
 }
 
 if (failed) { console.error(failed + ' stream test(s) failed'); process.exit(1); }
