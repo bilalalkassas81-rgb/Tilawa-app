@@ -41,7 +41,7 @@ jobs:
 
       - name: Install Transformers.js and Playwright
         run: |
-          npm i --no-save --no-package-lock @huggingface/transformers@3.7.6 playwright@1.49.1
+          npm i --no-save --no-package-lock --onnxruntime-node-install-cuda=skip @huggingface/transformers@3.7.6 playwright@1.49.1
           npx playwright install --with-deps chromium
 
       - name: Models on Hugging Face, and what each transcribes (Node)
