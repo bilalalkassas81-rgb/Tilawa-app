@@ -1,5 +1,6 @@
 import { normalize, tokens, buildUnits, align, findVerses } from './match.js';
-import { createRecognizer, speechSupport, speechReady, inClaude, isNative, startVoiceRecording } from './speech.js';
+import { createRecognizer, speechSupport, speechReady, inClaude, isNative, startVoiceRecording, aiAvailable } from './speech.js';
+import { AI_MB, aiInfo, loadModel, modelLoaded, modelCached } from './ai.js';
 import { db, save, today, logDaily, streak, exportJSON, importJSON, putRecording, getRecording, deleteRecording } from './store.js';
 import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr, BASMALA } from './meta.js';
 
@@ -18,6 +19,8 @@ function h(tag, attrs, ...kids) {
   return e;
 }
 const P = db.prefs;
+const useAi = () => P.voice === 'ai' && aiAvailable();
+const noVoice = () => speechSupport === 'none' && !useAi();
 const Cap = window.Capacitor;
 const plugin = (n) => (Cap && Cap.Plugins && Cap.Plugins[n]) || null;
 
@@ -230,9 +233,10 @@ let finder = null, finderText = '';
 $('#h-voice').addEventListener('click', async () => {
   const note = $('#h-voice-note');
   if (finder && finder.active) { finder.stop(); return; }
-  if (speechSupport === 'none') { note.hidden = false; note.textContent = 'Voice search needs Chrome, Safari or the Android app.'; return; }
+  if (noVoice()) { note.hidden = false; note.textContent = 'Voice search needs Chrome, Safari or the Android app.'; return; }
   finderText = '';
   finder = createRecognizer({
+    engine: P.voice, onNotice: (m) => { note.hidden = true; toast(m, 6000); }, onLoad: (m) => { note.hidden = false; note.textContent = m; },
     onPartial: (p) => showFinder(finderText + ' ' + p),
     onFinal: (f) => { finderText += ' ' + f; showFinder(finderText); },
     onState: (s) => { $('#h-voice').classList.toggle('on', s !== 'idle'); if (s === 'listening') { note.hidden = false; note.textContent = 'Listening… recite a few words of any verse.'; } if (s === 'idle' && !finderText.trim()) note.hidden = true; },
@@ -632,7 +636,7 @@ function update(force) {
   setState();
 }
 function micNote() {
-  if (speechSupport === 'none') return 'Voice recitation needs Chrome, Safari or the Android app. You can still test yourself with Memorize and Reveal word.';
+  if (noVoice()) return 'Voice recitation needs Chrome, Safari or the Android app. You can still test yourself with Memorize and Reveal word.';
   const [s, v] = R.verses[0] || [R.s, R.from];
   return `Tap the mic and recite from ${s}:${v}`;
 }
@@ -646,16 +650,19 @@ setInterval(() => { if (R.listening) renderMeta(); }, 1000);
 function setState(s) {
   const st = s || (rec && rec.state) || 'idle';
   const on = st !== 'idle';
-  const m = $('#mic'); m.classList.toggle('on', on); m.classList.toggle('off', speechSupport === 'none');
+  const m = $('#mic'); m.classList.toggle('on', on); m.classList.toggle('off', noVoice());
   m.setAttribute('aria-label', on ? 'Stop reciting' : 'Start reciting');
-  $('#st').textContent = st === 'listening' ? 'Listening…' : st === 'starting' ? 'Starting…' : st === 'finishing' ? 'Finishing…' : (R.res && R.res.finished ? 'Passage complete' : R.finals.length ? 'Paused' : 'Ready');
+  $('#st').textContent = st === 'listening' ? 'Listening…' : st === 'starting' ? R.loadMsg || 'Starting…' : st === 'finishing' ? 'Finishing…' : (R.res && R.res.finished ? 'Passage complete' : R.finals.length ? 'Paused' : 'Ready');
 }
 $('#mic').addEventListener('click', async () => {
-  if (speechSupport === 'none') { toast('Voice recitation is not supported in this browser. Try Chrome, Safari or the Android app.', 5000); return; }
+  if (noVoice()) { toast('Voice recitation is not supported in this browser. Try Chrome, Safari or the Android app.', 5000); return; }
   if (rec && rec.active) { stopRecite(); return; }
   if (R.res && R.res.finished) resetSession();
+  R.loadMsg = '';
   rec = createRecognizer({
-    lang: 'ar-SA',
+    lang: 'ar-SA', engine: P.voice,
+    onNotice: (m) => { R.loadMsg = ''; setState(); toast(m, 6000); },
+    onLoad: (m) => { R.loadMsg = m; setState(); },
     onPartial: (p) => { R.partial = p; update(); },
     onFinal: (f) => {
       // words heard after the page was completed (it turns by itself) belong to the next page
@@ -673,7 +680,7 @@ $('#mic').addEventListener('click', async () => {
   });
   try {
     await rec.start();
-    if (P.record && !isNative && !R.recorder) startVoiceRecording().then((r) => (R.recorder = r)).catch(() => {});
+    if (P.record && (!isNative || rec.stream) && !R.recorder) startVoiceRecording(rec.stream).then((r) => (R.recorder = r)).catch(() => {});
   } catch (e) { toast(e.message, 5000); }
 });
 function stopRecite() { if (rec && rec.active) rec.stop(); }
@@ -1279,11 +1286,34 @@ function renderSettings() {
   $('#s-theme').value = P.theme;
   const lang = $('#s-lang'); lang.textContent = ''; LANGS.forEach(([c, n]) => lang.append(h('option', { value: c, selected: c === P.trLang }, n)));
   const sr = $('#s-reciter'); sr.textContent = ''; RECITERS.forEach(([id, en]) => sr.append(h('option', { value: id, selected: id === P.reciter }, en)));
-  $('#s-record').checked = !!P.record; $('#s-record').disabled = isNative;
+  $('#s-record').checked = !!P.record; $('#s-record').disabled = isNative && !useAi();
+  renderVoice();
   $('#s-reminder').value = P.reminder || '';
   $('#s-rem-note').textContent = plugin('LocalNotifications') ? 'A notification at this time each day.' : 'Daily notifications work in the Android app. Here, add the page to your home screen and set a phone alarm.';
-  $('#s-ver').textContent = `Version ${VERSION} · ${isNative ? 'Android app' : 'Web app'} · voice: ${speechSupport}`;
+  $('#s-ver').textContent = `Version ${VERSION} · ${isNative ? 'Android app' : 'Web app'} · voice: ${useAi() ? `Qur’an AI${aiInfo.device ? ' (' + aiInfo.device + ')' : ''}` : speechSupport}`;
 }
+// Voice engine: the phone's own speech recognition, or the Qur'an AI model downloaded once and run on this device.
+function renderVoice() {
+  const sel = $('#s-voice'), note = $('#s-voice-note'), ok = aiAvailable();
+  sel.value = useAi() ? 'ai' : 'phone';
+  sel.querySelector('[value="ai"]').disabled = !ok;
+  if (!ok) note.textContent = inClaude ? 'The Qur’an AI model works in the Android app and the web app, not on this preview link.' : 'The Qur’an AI model needs a newer browser with microphone access.';
+  else if (!useAi()) note.textContent = `Your phone’s Arabic dictation (Google or Apple). Needs internet. The Qur’an AI model follows recitation more closely: a one-time download of about ${AI_MB} MB, then it works offline.`;
+  else if (modelLoaded()) note.textContent = 'Tarteel AI’s Qur’an model, running on this device. Works offline.';
+  else {
+    note.textContent = `Tarteel AI’s Qur’an model, running on this device. A one-time download of about ${AI_MB} MB, then it works offline.`;
+    modelCached().then((c) => { if (c && useAi() && !modelLoaded() && $('#s-dl').hidden) note.textContent = 'Tarteel AI’s Qur’an model, running on this device. Downloaded: works offline.'; });
+  }
+}
+$('#s-voice').addEventListener('change', (e) => {
+  P.voice = e.target.value; save(); renderSettings();
+  if (!useAi() || modelLoaded()) return;
+  const box = $('#s-dl'), bar = $('#s-dl-bar'), msg = $('#s-dl-msg');
+  box.hidden = false; bar.hidden = false; bar.removeAttribute('value'); msg.textContent = 'Getting the Qur’an model…';
+  loadModel((m, f) => { msg.textContent = m; if (f) bar.value = f; else bar.removeAttribute('value'); })
+    .then(() => { box.hidden = true; renderSettings(); if (useAi()) toast('The Qur’an AI model is ready. It works offline from now on.'); })
+    .catch((err) => { bar.hidden = true; msg.textContent = err.message + ' Until then Tilawa uses phone speech recognition.'; renderSettings(); });
+});
 $('#s-theme').addEventListener('change', (e) => { P.theme = e.target.value; save(); applyTheme(); });
 $('#s-lang').addEventListener('change', (e) => { P.trLang = e.target.value; save(); });
 $('#s-reciter').addEventListener('change', (e) => { P.reciter = e.target.value; save(); updatePlayerLabel(); });

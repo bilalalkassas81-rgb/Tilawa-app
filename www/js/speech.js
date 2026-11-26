@@ -1,5 +1,6 @@
-// Speech recognition: native plugin inside the Android/iOS app, Web Speech API in browsers.
-// Exposes one interface: start(), stop(), active, onPartial/onFinal/onState callbacks.
+// Speech recognition: native plugin inside the Android/iOS app, Web Speech API in browsers, or (when chosen) the
+// on-device Qur'an AI model. Exposes one interface: start(), stop(), cut(), active, onPartial/onFinal/onState callbacks.
+import { aiSupported, createAiEngine } from './ai.js';
 
 const Cap = window.Capacitor;
 const isNative = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
@@ -14,9 +15,11 @@ export const speechReady = inClaude
   ? Promise.resolve(window.claude.use('dictation')).catch(() => null).then((d) => { dictation = d || null; if (d) speechSupport = 'dictation'; return speechSupport; })
   : Promise.resolve(speechSupport);
 export { isNative };
+// The Qur'an AI engine needs the page's own microphone, which the Claude preview frame blocks.
+export const aiAvailable = () => !inClaude && aiSupported();
 
-export function createRecognizer({ lang = 'ar-SA', onPartial: partialCb, onFinal: finalCb, onState, onError }) {
-  let want = false, state = 'idle', rec = null, lastPartial = '';
+export function createRecognizer({ lang = 'ar-SA', engine = 'phone', onPartial: partialCb, onFinal: finalCb, onState, onError, onNotice, onLoad }) {
+  let want = false, state = 'idle', rec = null, lastPartial = '', ai = null;
   const set = (s) => { state = s; onState && onState(s); };
   // cut(): the app has kept the words heard so far in this phrase (the page is complete). Recognisers keep
   // sending the whole phrase until it ends, so those first words are dropped from what is sent next.
@@ -127,12 +130,33 @@ export function createRecognizer({ lang = 'ar-SA', onPartial: partialCb, onFinal
     });
   }
 
+  // The Qur'an AI model: it owns the microphone for the whole session, so the phone's recogniser is never started.
+  async function startAi() {
+    ai = createAiEngine({
+      onPartial, onFinal, onLoad,
+      onError: (e) => { if (!want) return; want = false; onError && onError(e); const a = ai; a && a.stop().then(() => { if (ai === a && !want) set('idle'); }); },
+    });
+    set('starting');
+    await ai.start();
+    if (want) set('listening');
+  }
+
   return {
     get active() { return want; },
     get state() { return state; },
-    cut() { cutN = words(lastRaw).length; },
+    get stream() { return ai ? ai.stream : null; },
+    cut() { if (ai) ai.cut(); else cutN = words(lastRaw).length; },
     async start() {
       if (want) return; want = true;
+      if (engine === 'ai' && aiAvailable()) {
+        try { await startAi(); return; }
+        catch (e) {
+          ai = null;
+          if (!want) return;
+          if (speechSupport === 'none') { want = false; set('idle'); throw e; }
+          onNotice && onNotice(e.message + ' Using phone speech recognition this time.');
+        }
+      }
       if (speechSupport === 'dictation') return startDictation();
       try {
         if (speechSupport === 'native') await startNative();
@@ -142,6 +166,7 @@ export function createRecognizer({ lang = 'ar-SA', onPartial: partialCb, onFinal
     },
     async stop() {
       want = false;
+      if (ai) { const a = ai; set('finishing'); await a.stop(); if (ai === a) set('idle'); return; }
       if (speechSupport === 'dictation') { set('finishing'); await dictation.stop().catch(() => {}); return; }
       if (speechSupport === 'native') {
         clearInterval(watchdog); watchdog = 0; clearTimeout(restartTimer); restartTimer = 0; restarting = false; set('finishing');
@@ -157,10 +182,11 @@ export function createRecognizer({ lang = 'ar-SA', onPartial: partialCb, onFinal
   };
 }
 
-/* Optional: record the reciter's own voice (browsers only; the native recogniser owns the mic in the app). */
-export async function startVoiceRecording() {
-  if (isNative || !navigator.mediaDevices || !window.MediaRecorder) return null;
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+/* Optional: record the reciter's own voice. In the app the native recogniser owns the mic, so only with the Qur'an
+   AI engine, whose microphone stream is shared (a copy of its track, so each side stops its own). */
+export async function startVoiceRecording(shared) {
+  if ((isNative && !shared) || !navigator.mediaDevices || !window.MediaRecorder) return null;
+  const stream = shared ? new MediaStream(shared.getAudioTracks().map((t) => t.clone())) : await navigator.mediaDevices.getUserMedia({ audio: true });
   const mr = new MediaRecorder(stream);
   const chunks = [];
   mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
