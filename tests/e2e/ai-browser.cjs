@@ -4,10 +4,19 @@
 // Run: WAV=<recitation.wav> [SECONDS=150] [URL=http://localhost:8080/] node tests/e2e/ai-browser.cjs
 const { chromium } = require('playwright');
 
+// MODELS: a JSON array to use instead of AI_MODELS in www/js/ai.js; ARGS: extra Chromium switches (e.g. for WebGPU)
 const WAV = process.env.WAV, SECONDS = +(process.env.SECONDS || 150), URL = process.env.URL || 'http://localhost:8080/';
 (async () => {
-  const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${WAV}`, '--autoplay-policy=no-user-gesture-required'] });
+  const args = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${WAV}`, '--autoplay-policy=no-user-gesture-required', ...(process.env.ARGS || '').split(' ').filter(Boolean)];
+  const browser = await chromium.launch({ args, ...(process.env.CHANNEL ? { channel: process.env.CHANNEL } : {}) });
   const ctx = await browser.newContext();
+  if (process.env.MODELS) {
+    await ctx.route('**/js/ai.js', async (route) => {
+      const r = await route.fetch();
+      const body = (await r.text()).replace(/export const AI_MODELS = \[[\s\S]*?\n\];/, `export const AI_MODELS = ${process.env.MODELS};`);
+      route.fulfill({ response: r, body });
+    });
+  }
   const page = await ctx.newPage();
   const t0 = Date.now(); const ts = () => ((Date.now() - t0) / 1000).toFixed(1).padStart(6) + 's';
   page.on('console', (m) => console.log(ts(), 'page', m.type(), m.text().slice(0, 500)));

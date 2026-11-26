@@ -1,6 +1,6 @@
 name: Qur'an AI engine check (real model)
 
-# Manual only: downloads the real model (~100 MB per export) and runs the app in Chromium with real recitation.
+# Manual only: downloads the real model and runs the app in Chromium with real recitation.
 on:
   workflow_dispatch:
   push:
@@ -8,9 +8,30 @@ on:
     paths: ['www/js/**', 'tests/e2e/**', '.github/workflows/ai-diag.yml']
 
 jobs:
-  check:
+  browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: app default
+            models: ''
+            args: ''
+          - name: base q4 wasm
+            models: '[{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"wasm","dtype":"q4"}]'
+            args: ''
+          - name: tiny q8 wasm (Sharjeelbaig)
+            models: '[{"id":"Sharjeelbaig/whisper-tiny-ar-quran-onnx","device":"wasm","dtype":"q8"}]'
+            args: ''
+          - name: tiny int8 wasm (emadjumaah)
+            models: '[{"id":"emadjumaah/mishkat-whisper-tiny-ar-quran-onnx","device":"wasm","dtype":"int8"}]'
+            args: ''
+          - name: webgpu swiftshader
+            models: '[{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"webgpu","dtype":"q4"},{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"webgpu","dtype":{"encoder_model":"fp32","decoder_model_merged":"q4"}}]'
+            args: '--enable-unsafe-webgpu --use-webgpu-adapter=swiftshader --enable-features=Vulkan --use-angle=swiftshader'
+            channel: chromium
+    name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,53 +47,35 @@ jobs:
             for v in 1 2 3 4 5 6 7; do
               f=$(printf '001%03d' $v)
               curl -sSfL -o audio/$r/$f.mp3 https://everyayah.com/data/$r/$f.mp3
-              ffmpeg -loglevel error -y -i audio/$r/$f.mp3 -ac 1 -ar 16000 -f f32le audio/$r/$f.f32
             done
-            # one file for the fake microphone: 3 s of silence, the seven verses, 30 s of silence
-            ls audio/$r/*.mp3 | sed 's/^/file /' | sed "s|file audio/$r/|file |" > audio/$r/list.txt
-            (cd audio/$r && ffmpeg -loglevel error -y -f concat -safe 0 -i list.txt -ac 1 -ar 48000 cat.wav)
+            (cd audio/$r && ls *.mp3 | sed 's/^/file /' > list.txt && ffmpeg -loglevel error -y -f concat -safe 0 -i list.txt -ac 1 -ar 48000 cat.wav)
+            # for the fake microphone: 3 s of silence, the seven verses, 30 s of silence
             ffmpeg -loglevel error -y -f lavfi -t 3 -i anullsrc=r=48000:cl=mono -i audio/$r/cat.wav -f lavfi -t 30 -i anullsrc=r=48000:cl=mono \
               -filter_complex '[0:a][1:a][2:a]concat=n=3:v=0:a=1' -c:a pcm_s16le audio/$r.wav
-            # the same, 24 dB quieter (a phone held further away)
-            ffmpeg -loglevel error -y -i audio/$r.wav -af volume=-24dB -c:a pcm_s16le audio/$r-quiet.wav
           done
-          ls -la audio audio/*/ | head -60
-          for f in audio/*.wav; do echo "$f"; ffmpeg -hide_banner -i $f -af volumedetect -f null - 2>&1 | grep -E 'Duration|mean_volume|max_volume'; done
 
-      - name: Install Transformers.js and Playwright
+      - name: Install Playwright
         run: |
-          npm i --no-save --no-package-lock --onnxruntime-node-install-cuda=skip @huggingface/transformers@3.7.6 playwright@1.49.1
+          npm i --no-save --no-package-lock playwright@1.49.1
           npx playwright install --with-deps chromium
-
-      - name: Models on Hugging Face, and what each transcribes (Node)
-        env:
-          AUDIO_DIR: audio/Alafasy_128kbps
-          EXTRA_MODELS: omartariq612/whisper-tiny-ar-quran-onnx
-        run: node tests/e2e/model-check.mjs 2>&1 | grep -v 'onnxruntime.*W:' || true
 
       - name: Serve the app
         run: |
           nohup npx --yes http-server www -p 8080 -c-1 -s > /dev/null 2>&1 &
           sleep 5; curl -sSf -o /dev/null http://localhost:8080/ && echo serving
 
-      - name: The app in Chromium with the real model (Alafasy)
+      - name: Alafasy
         continue-on-error: true
-        run: |
-          WAV=$PWD/audio/Alafasy_128kbps.wav SECONDS=150 node tests/e2e/ai-browser.cjs
-
-      - name: The app in Chromium (Husary)
-        continue-on-error: true
-        run: |
-          WAV=$PWD/audio/Husary_128kbps.wav SECONDS=200 node tests/e2e/ai-browser.cjs
-
-      - name: The app in Chromium (Alafasy, 24 dB quieter)
-        continue-on-error: true
-        run: |
-          WAV=$PWD/audio/Alafasy_128kbps-quiet.wav SECONDS=150 node tests/e2e/ai-browser.cjs
-
-      - name: Second reciter (Node)
         env:
-          AUDIO_DIR: audio/Husary_128kbps
-          DTYPES: q8
-          STREAM_MODELS: 1
-        run: node tests/e2e/model-check.mjs 2>&1 | grep -v 'onnxruntime.*W:' | sed -n '/== Audio/,$p' || true
+          MODELS: ${{ matrix.models }}
+          ARGS: ${{ matrix.args }}
+          CHANNEL: ${{ matrix.channel }}
+        run: WAV=$PWD/audio/Alafasy_128kbps.wav SECONDS=150 node tests/e2e/ai-browser.cjs
+
+      - name: Husary
+        continue-on-error: true
+        env:
+          MODELS: ${{ matrix.models }}
+          ARGS: ${{ matrix.args }}
+          CHANNEL: ${{ matrix.channel }}
+        run: WAV=$PWD/audio/Husary_128kbps.wav SECONDS=150 node tests/e2e/ai-browser.cjs
