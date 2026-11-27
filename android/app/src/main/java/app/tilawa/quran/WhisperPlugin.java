@@ -150,7 +150,7 @@ public class WhisperPlugin extends Plugin {
                 r.put("cores", cores);
                 r.put("size", model.length());
                 r.put("system", WhisperNative.systemInfo());
-                Log.i(TAG, "loaded " + file + " in " + loadMs + " ms; warm-up " + st[0] + " ms; threads " + threads + "/" + cores + "; " + WhisperNative.systemInfo());
+                Log.i(TAG, "loaded " + file + " in " + loadMs + " ms; warm-up " + Math.min(first, st[0]) + " ms; threads " + threads + "/" + cores + "; " + WhisperNative.systemInfo());
                 call.resolve(r);
             } catch (DownloadError e) {
                 Log.w(TAG, "download", e);

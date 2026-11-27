@@ -1,15 +1,12 @@
 name: Qur'an AI engine check (real model)
 
-# Manual only: downloads the real model and runs the app in Chromium with real recitation.
+# Manual only: downloads the real models and runs the app with real recitation as the microphone, in Chromium (web
+# engine) and in an Android emulator (native engine: debug APK, then tests/e2e/android-run.sh per model).
 on:
   workflow_dispatch:
-  push:
-    branches: [ccr-ac57e0d6-fjuemr]
-    paths: ['www/js/**', 'tests/e2e/**', '.github/workflows/ai-diag.yml']
 
 jobs:
   browser:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
