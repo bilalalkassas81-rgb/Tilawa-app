@@ -138,7 +138,7 @@ jobs:
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep '\.so$'
 
   android:
-    name: Emulator, native ${{ matrix.model }}, ${{ matrix.gpu }}
+    name: Emulator, native ${{ matrix.model }}
     needs: apk
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -146,7 +146,6 @@ jobs:
       fail-fast: false
       matrix:
         model: [base-q8_0, tiny-q8_0]
-        gpu: [swangle_indirect, guest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -172,9 +171,10 @@ jobs:
           arch: x86_64
           target: google_apis
           cores: 4
+          # (the default renderer, swiftshader_indirect, made the emulator quit when the page scrolled with the engine busy)
           ram-size: 4096M
           disable-animations: true
-          emulator-options: -no-window -gpu ${{ matrix.gpu }} -no-boot-anim -camera-back none -no-snapshot
+          emulator-options: -no-window -gpu swangle_indirect -no-boot-anim -camera-back none -no-snapshot
           script: |
             adb install -r app-debug.apk
             adb shell pm grant app.tilawa.quran android.permission.RECORD_AUDIO
