@@ -38,7 +38,9 @@ const PKG = 'app.tilawa.quran';
   page.on('pageerror', (e) => console.log(ts(), 'PAGEERROR', e.message));
   page.on('worker', (w) => w.on('console', (m) => console.log(ts(), 'worker', m.type(), m.text().slice(0, 500))));
   page.on('requestfailed', (r) => console.log(ts(), 'REQFAILED', r.url(), r.failure() && r.failure().errorText));
-  await page.addInitScript((fake) => {
+  await page.addInitScript(({ fake, native }) => {
+    window.__tilawaDiag = true; // ai.js logs every pass of the native engine
+    if (native) window.__tilawaNative = native;
     localStorage.setItem('tilawa.app.v1', JSON.stringify({ prefs: { voice: 'phone', page: 1 } }));
     // time every transcription the app asks of the model worker
     const Base = window.Worker;
@@ -72,7 +74,7 @@ const PKG = 'app.tilawa.quran';
         return d.stream;
       };
     }
-  }, process.env.FAKE_MIC || '');
+  }, { fake: process.env.FAKE_MIC || '', native: process.env.NATIVE ? JSON.parse(process.env.NATIVE) : null });
   if (process.env.ANDROID) await page.reload(); else await page.goto(URL);
   await page.waitForTimeout(2500);
   console.log(ts(), 'env', JSON.stringify(await page.evaluate(async () => ({ ua: navigator.userAgent, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory, isolated: self.crossOriginIsolated, sab: typeof SharedArrayBuffer, gpu: !!navigator.gpu, adapter: navigator.gpu ? !!(await navigator.gpu.requestAdapter().catch(() => null)) : false, worklet: typeof AudioWorkletNode, voice: document.querySelector('#s-ver') && document.querySelector('#s-ver').textContent }))));
@@ -99,6 +101,26 @@ const PKG = 'app.tilawa.quran';
     if (s.msg !== lastMsg && (!/Downloading/.test(s.msg) || i % 10 === 0)) { console.log(ts(), 'settings:', s.msg); lastMsg = s.msg; }
     if (!s.dl || /could not|needs an internet/i.test(s.msg)) { console.log(ts(), `settings done after ${((Date.now() - tl) / 1000).toFixed(1)} s; toast: ${s.toast}; version line: ${await page.textContent('#s-ver')}`); break; }
     await page.waitForTimeout(500);
+  }
+
+  // CLIPS=1 (Android app): time the native engine directly on 1, 5 and 15 s of the recording, with the encoder sized
+  // to the clip and with Whisper's full 30 s window (median of 3)
+  if (process.env.CLIPS && process.env.FAKE_MIC) {
+    const clips = await page.evaluate(async ({ fake, margin }) => {
+      const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Whisper;
+      if (!W) return 'no native engine';
+      const data = await (await fetch(fake)).arrayBuffer();
+      const x = (await new OfflineAudioContext(1, 16000, 16000).decodeAudioData(data)).getChannelData(0);
+      const b64 = (a) => { const b = new Uint8Array(a.length * 2), v = new DataView(b.buffer); a.forEach((f, i) => v.setInt16(i * 2, Math.max(-1, Math.min(1, f)) * 32767, true)); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+      const out = [];
+      for (const sec of [1, 5, 15]) for (const m of [margin, -1]) {
+        const audio = b64(x.subarray(3 * 16000, (3 + sec) * 16000)), ms = []; let r = null;
+        for (let k = 0; k < 3; k++) { r = await W.transcribe({ audio, audioCtx: m < 0 ? 0 : Math.min(1500, Math.ceil((sec + m) * 50)), beam: 1 }); ms.push(r.ms); }
+        out.push(`${sec} s, ${m < 0 ? 'full window' : 'ctx ' + r.audioCtx}: ${ms.sort((a, b) => a - b)[1]} ms "${r.text}"`);
+      }
+      return out;
+    }, { fake: process.env.FAKE_MIC, margin: process.env.NATIVE ? JSON.parse(process.env.NATIVE).margin ?? 1 : 1 });
+    console.log('CLIPS', JSON.stringify(clips, null, 1));
   }
 
   // Recite Al-Fatiha

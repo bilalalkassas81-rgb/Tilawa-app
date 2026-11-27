@@ -1,7 +1,27 @@
 // Optional voice engine: Tarteel AI's Qur'an-trained Whisper models (tarteel-ai/whisper-base-ar-quran and
-// whisper-tiny-ar-quran) run on this device with transformers.js. The library and the model download once, on first
-// use, and are cached for offline use.
+// whisper-tiny-ar-quran) run on this device. In the Android app natively, with whisper.cpp (the plugin "Whisper",
+// android/app/src/main/cpp); in the web app with transformers.js in a worker. The model downloads once, on first use,
+// and is kept for offline use. Either way the page reads the microphone and stream.js finds the phrases.
 import { createStreamer, createResampler, RATE } from './stream.js';
+
+const Cap = typeof window === 'object' ? window.Capacitor : null;
+const NW = Cap && Cap.isNativePlatform && Cap.isNativePlatform() && Cap.Plugins ? Cap.Plugins.Whisper : null;
+// The Android app's models: converted to whisper.cpp's format and quantized by .github/workflows/models.yml, published
+// once as assets of this repository's release models-v1. sha256 is checked after the download.
+const REL = 'https://github.com/bilalalkassas81-rgb/Tilawa-app/releases/download/models-v1/';
+export const NATIVE_MODELS = {
+  'base-q8_0': { file: 'ggml-tarteel-base-q8_0.bin', mb: 82, sha256: '72194195f7d280adebec57acf2c6e01e209484322ec1cec21c275a3c0b1e3d77' },
+  'base-q5_1': { file: 'ggml-tarteel-base-q5_1.bin', mb: 60, sha256: 'acc1f03c8b1468b674b4fab50e0b2312cff982ba0001cd16fe36ca23862b6536' },
+  'tiny-q8_0': { file: 'ggml-tarteel-tiny-q8_0.bin', mb: 44, sha256: 'ef01ab441b004f9e6f1ea98d397b43452b3a45efab7c3928ab37af655dde8b52' },
+  'tiny-q5_1': { file: 'ggml-tarteel-tiny-q5_1.bin', mb: 32, sha256: 'af8dfdd73c60b32e4e6d72e98e095e33fbeb04b9d39508580d051aa28202c646' },
+};
+// model: which of the above. margin: the encoder hears the clip plus this many seconds instead of Whisper's whole 30 s
+// window (-1 = the whole window), which makes a short phrase many times cheaper. beam: 1 = greedy.
+// (window.__tilawaNative overrides these, for the diagnostic tests.)
+export const NATIVE = { model: 'base-q8_0', margin: 1, beam: 1, ...(typeof window === 'object' && window.__tilawaNative) };
+const NM = NATIVE_MODELS[NATIVE.model] || NATIVE_MODELS['base-q8_0'];
+export const nativeAi = !!NW;
+const ctxFor = (sec) => (NATIVE.margin < 0 ? 0 : Math.min(1500, Math.ceil((sec + NATIVE.margin) * 50)));
 
 // Pinned: sw.js caches this exact version, and transformers.js fetches its ONNX runtime files from the same folder.
 export const AI_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js';
@@ -22,11 +42,23 @@ const TINY = [
 ];
 const phone = typeof navigator === 'object' && (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || '')));
 export const AI_MODELS = phone ? [...TINY, ...BASE.filter((m) => m.device === 'wasm')] : [...BASE, ...TINY];
-export const AI_MB = phone ? 85 : 100; // shown before the first download: the model and the runtime (about 22 MB)
+// shown before the first download: the model (and in the web app the runtime, about 22 MB)
+export const AI_MB = NW ? NM.mb : phone ? 85 : 100;
 
-export const aiSupported = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && typeof WebAssembly === 'object'
-  && typeof Worker === 'function' && !!(window.AudioContext || window.webkitAudioContext);
+export const aiSupported = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && !!(window.AudioContext || window.webkitAudioContext)
+  && (!!NW || (typeof WebAssembly === 'object' && typeof Worker === 'function'));
 export const aiInfo = { device: '', model: '', ms: 0 };
+/** For the version line: e.g. "native, base q8_0, 0.21 s". */
+export function aiLabel() {
+  if (!aiInfo.device) return '';
+  const m = (aiInfo.model.match(/(base|tiny)-(q\w+|f16)/) || [])[0];
+  return `${aiInfo.device}, ${m ? m.replace('-', ' ') : /tiny/.test(aiInfo.model) ? 'tiny' : 'base'}, ${(aiInfo.ms / 1000).toFixed(aiInfo.ms < 1000 ? 2 : 1)} s`;
+}
+// One pass of the warm-up taking longer than this: too slow to follow recitation. The web engine always hears 30 s;
+// the native one times 2 s of audio, as most phrases are a few seconds.
+const SLOW_MS = NW ? 1500 : 3000;
+export const aiTooSlow = () => aiInfo.ms > SLOW_MS;
+const diag = (o) => { if (typeof window === 'object' && window.__tilawaDiag) console.log('DIAG run', JSON.stringify(o)); };
 
 let worker = null, ready = null, loadCbs = [], jobs = new Map(), seq = 0, files = {}, crashCbs = new Set();
 let sessions = 0, idleT = 0;
@@ -57,6 +89,7 @@ function getWorker() {
 function reset() {
   clearTimeout(idleT); idleT = 0;
   if (worker) worker.terminate();
+  if (NW && aiInfo.device) NW.unload().catch(() => {});
   worker = null; ready = null; files = {}; Object.assign(aiInfo, { device: '', model: '', ms: 0 });
 }
 // The worker died or threw outside a call. While loading, that is a failed load (the caller falls back to the phone
@@ -75,10 +108,11 @@ function idle(ms) {
   idleT = setTimeout(() => { idleT = 0; if (!sessions && !loadCbs.length && !jobs.size) reset(); }, ms);
 }
 /** Free the model now (the setting is back on the phone engine) or after `ms` (the app is in the background). Never during a session. */
-export function unloadModel(ms = 0) { if (!sessions && worker) idle(ms); }
+export function unloadModel(ms = 0) { if (!sessions && (worker || (NW && aiInfo.device))) idle(ms); }
 
 /** Download (once) and load the model. onProgress(message, fraction) while it downloads. */
 export function loadModel(onProgress) {
+  if (!ready && NW) ready = loadNative();
   if (!ready) {
     ready = new Promise((res, rej) => {
       loadCbs.push((msg, frac, err, kind) => { if (msg === null) (err ? rej(Object.assign(new Error(err), { kind })) : res(aiInfo)); });
@@ -101,8 +135,54 @@ export function loadModel(onProgress) {
 }
 export const modelLoaded = () => !!aiInfo.device;
 
-/** Is a downloaded copy of the model in the browser's cache (so it works offline)? */
+// The Android app: the model is downloaded by the plugin into the app's own files.
+function loadNative() {
+  let sub = null;
+  return (async () => {
+    sub = await NW.addListener('progress', (e) => {
+      const a = e.loaded || 0, b = e.total > 0 ? e.total : NM.mb * 1e6;
+      const msg = a < b ? `Downloading the Qur’an model… ${Math.round(a / 1e6)} of ${Math.round(b / 1e6)} MB` : 'Preparing the Qur’an model…';
+      loadCbs.forEach((cb) => cb(msg, a / b));
+    });
+    loadCbs.forEach((cb) => cb('Preparing the Qur’an model…', 0));
+    const r = await NW.load({ url: REL + NM.file, file: NM.file, sha256: NM.sha256, warmCtx: ctxFor(2) });
+    Object.assign(aiInfo, { device: 'native', model: NM.file, ms: r.ms, threads: r.threads });
+    console.log('Tilawa: Qur’an model (native):', JSON.stringify({ ...r, margin: NATIVE.margin, beam: NATIVE.beam }));
+    const cbs = loadCbs; loadCbs = []; cbs.forEach((cb) => cb(null, 1, null));
+    if (!sessions) idle(IDLE_MS);
+    return aiInfo;
+  })().catch((e) => {
+    ready = null; loadCbs = [];
+    Object.assign(aiInfo, { device: '', model: '', ms: 0 });
+    const offline = typeof navigator.onLine === 'boolean' && !navigator.onLine;
+    console.warn('Tilawa: Qur’an model (native) not loaded:', e && (e.code || ''), e && e.message);
+    throw Object.assign(new Error(offline && e.code === 'download' ? 'The Qur’an AI model needs an internet connection the first time, to download.'
+      : e.code === 'download' ? (e.message || 'The Qur’an AI model could not be downloaded. Check your internet connection.')
+      : 'The Qur’an AI model could not run on this phone.'), { code: 'model' });
+  }).finally(() => { if (sub) sub.remove(); });
+}
+
+// int16 PCM as base64, for the bridge to the native engine
+function pcm16(audio) {
+  const b = new Uint8Array(audio.length * 2), v = new DataView(b.buffer);
+  for (let i = 0; i < audio.length; i++) v.setInt16(i * 2, Math.max(-1, Math.min(1, audio[i])) * 32767, true);
+  let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+async function transcribeNative(audio) {
+  const sec = audio.length / RATE, t = performance.now();
+  const r = await Promise.race([
+    NW.transcribe({ audio: pcm16(audio), audioCtx: ctxFor(sec), beam: NATIVE.beam }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('The Qur’an model took too long.')), 60000)),
+  ]);
+  diag({ audio: +sec.toFixed(2), ms: Math.round(performance.now() - t), native: r.ms, ctx: r.audioCtx, tokens: r.tokens, text: r.text });
+  return r.text || '';
+}
+
+/** Is a downloaded copy of the model kept (so it works offline)? */
 export async function modelCached() {
+  if (NW) { try { return !!(await NW.cached({ file: NM.file })).cached; } catch (_) { return false; } }
   try {
     const keys = await (await caches.open('transformers-cache')).keys();
     return AI_MODELS.some((m) => keys.some((k) => k.url.includes('/' + m.id + '/') && /\.onnx$/.test(k.url)));
@@ -110,6 +190,7 @@ export async function modelCached() {
 }
 
 function transcribe(audio) {
+  if (NW) return transcribeNative(audio);
   return new Promise((res, rej) => {
     const id = ++seq;
     const t = setTimeout(() => { if (jobs.delete(id)) rej(new Error('The Qur’an model took too long.')); }, 60000);

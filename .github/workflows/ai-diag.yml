@@ -9,6 +9,7 @@ on:
 
 jobs:
   browser:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -64,10 +65,10 @@ jobs:
           UA: ${{ matrix.ua }}
         run: WAV=$PWD/audio/Husary_128kbps.wav SECONDS=150 node tests/e2e/ai-browser.cjs
 
-  android:
-    name: Android emulator (WebView)
+  apk:
+    name: Debug APK for the emulator (x86_64)
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -79,23 +80,57 @@ jobs:
           distribution: temurin
           java-version: 21
           cache: gradle
-
+      - uses: actions/cache@v4
+        with:
+          path: |
+            android/app/.cxx
+            android/app/build/whisper-src-v1.9.5
+          key: cxx-x86_64-${{ hashFiles('android/app/src/main/cpp/CMakeLists.txt', 'android/app/build.gradle') }}
       - name: Recitation audio, played in the app as the microphone
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
-          mkdir -p audio
-          for v in 1 2 3 4 5 6 7; do curl -sSfL -o audio/$(printf '001%03d' $v).mp3 https://everyayah.com/data/Alafasy_128kbps/$(printf '001%03d' $v).mp3; done
-          (cd audio && ls *.mp3 | sed 's/^/file /' > list.txt && ffmpeg -loglevel error -y -f concat -safe 0 -i list.txt -ac 1 -ar 48000 cat.wav)
-          ffmpeg -loglevel error -y -f lavfi -t 3 -i anullsrc=r=48000:cl=mono -i audio/cat.wav -f lavfi -t 30 -i anullsrc=r=48000:cl=mono \
+          for r in Alafasy_128kbps Husary_128kbps; do
+            mkdir -p audio/$r
+            for v in 1 2 3 4 5 6 7; do curl -sSfL -o audio/$r/$(printf '001%03d' $v).mp3 https://everyayah.com/data/$r/$(printf '001%03d' $v).mp3; done
+            (cd audio/$r && ls *.mp3 | sed 's/^/file /' > list.txt && ffmpeg -loglevel error -y -f concat -safe 0 -i list.txt -ac 1 -ar 48000 cat.wav)
+          done
+          # 3 s of silence, the seven verses, 30 s of silence, in the app's web folder (debug build only)
+          ffmpeg -loglevel error -y -f lavfi -t 3 -i anullsrc=r=48000:cl=mono -i audio/Alafasy_128kbps/cat.wav -f lavfi -t 30 -i anullsrc=r=48000:cl=mono \
             -filter_complex '[0:a][1:a][2:a]concat=n=3:v=0:a=1' -ac 1 -ar 22050 -c:a pcm_s16le www/diag.wav
-          ls -la www/diag.wav
-
-      - name: Debug APK
+          ffmpeg -loglevel error -y -f lavfi -t 3 -i anullsrc=r=48000:cl=mono -i audio/Husary_128kbps/cat.wav -f lavfi -t 30 -i anullsrc=r=48000:cl=mono \
+            -filter_complex '[0:a][1:a][2:a]concat=n=3:v=0:a=1' -ac 1 -ar 22050 -c:a pcm_s16le www/diag2.wav
+          ls -la www/diag*.wav
+      - name: Build
         run: |
+          ls $ANDROID_HOME/ndk $ANDROID_HOME/cmake || true
           npm ci
           npx cap sync android
-          cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon -q
+          cd android && chmod +x gradlew && time ./gradlew assembleDebug --no-daemon -q -PtilawaAbis=x86_64
           ls -la app/build/outputs/apk/debug/
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep '\.so$'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 3
+
+  android:
+    name: Emulator, native ${{ matrix.model }}
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [base-q8_0, base-q5_1, tiny-q8_0, tiny-q5_1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: debug-apk
 
       - name: Playwright (Android WebView driver)
         run: npm i --no-save --no-package-lock playwright@1.49.1
@@ -106,7 +141,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: The app in the emulator with the real model
+      - name: The app in the emulator with the native engine
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -117,8 +152,9 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none -no-snapshot
           script: |
-            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r app-debug.apk
             adb shell pm grant app.tilawa.quran android.permission.RECORD_AUDIO
-            adb shell dumpsys package com.google.android.webview | grep versionName | head -2 || true
-            ANDROID=1 FAKE_MIC=/diag.wav PHONE=1 SECONDS=180 node tests/e2e/ai-browser.cjs || true
-            ANDROID=1 FAKE_MIC=/diag.wav SECONDS=180 MODELS='[{"id":"yaltaieh/whisper-base-ar-quran-onnx","device":"wasm","dtype":"q8"}]' node tests/e2e/ai-browser.cjs || true
+            ANDROID=1 FAKE_MIC=/diag.wav SECONDS=150 CLIPS=1 NATIVE='{"model":"${{ matrix.model }}","margin":1}' node tests/e2e/ai-browser.cjs || true
+            ANDROID=1 FAKE_MIC=/diag2.wav SECONDS=150 NATIVE='{"model":"${{ matrix.model }}","margin":1}' node tests/e2e/ai-browser.cjs || true
+            ANDROID=1 FAKE_MIC=/diag.wav SECONDS=150 NATIVE='{"model":"${{ matrix.model }}","margin":-1}' node tests/e2e/ai-browser.cjs || true
+            adb logcat -d -s TilawaWhisper:* AndroidRuntime:E DEBUG:* | tail -40 || true
