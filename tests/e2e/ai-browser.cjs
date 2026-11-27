@@ -149,4 +149,5 @@ const PKG = 'app.tilawa.quran';
   await tap('#mic');
   await page.waitForTimeout(3000);
   if (browser) await browser.close();
+  process.exit(0); // the Android device connection would keep Node running
 })().catch((e) => { console.error(e); process.exit(1); });
