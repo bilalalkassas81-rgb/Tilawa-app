@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [ccr-ac57e0d6-fjuemr]
-    paths: ['.github/workflows/models.yml', 'tests/native/**']
+    paths: ['.github/workflows/models.yml', 'tests/native/**', 'android/app/src/main/cpp/tw.cpp']
 
 permissions:
   contents: write

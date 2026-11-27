@@ -10,6 +10,29 @@
 
 static std::once_flag backends_once;
 
+// Length of the unit repeated at the end of ids (the same 2+ tokens three times in a row, or one token four times),
+// or 0. Recitation never says the same words three times running: that is the model stuck in a loop.
+static int repeated_tail(const std::vector<int> & ids) {
+    const int n = (int) ids.size();
+    for (int p = 1; p <= 16; p++) {
+        const int times = p == 1 ? 4 : 3;
+        if (times * p > n) break;
+        bool rep = true;
+        for (int i = 0; i < (times - 1) * p && rep; i++) rep = ids[n - 1 - i] == ids[n - 1 - i - p];
+        if (rep) return p;
+    }
+    return 0;
+}
+
+// Ends the text as soon as it starts looping, instead of decoding up to max_tokens of it.
+static void stop_loops(whisper_context * ctx, whisper_state *, const whisper_token_data * tokens, int n, float * logits, void *) {
+    std::vector<int> ids(n);
+    for (int i = 0; i < n; i++) ids[i] = tokens[i].id;
+    if (!repeated_tail(ids)) return;
+    const int nv = whisper_n_vocab(ctx), eot = whisper_token_eot(ctx);
+    for (int v = 0; v < nv; v++) if (v != eot) logits[v] = -INFINITY;
+}
+
 whisper_context * tw_load(const char * model_path, const char * backend_dir) {
     std::call_once(backends_once, [&] {
         // With GGML_BACKEND_DL the CPU backend is one of several builds (plain ARMv8.0, dot product, fp16, int8
@@ -64,14 +87,29 @@ tw_result tw_transcribe(whisper_context * ctx, const float * pcm, int n, int thr
     // Deliberately no initial prompt with the expected verse: the model would then "hear" the right word when the
     // reader says a wrong one, hiding the very mistakes the app is there to show.
     p.initial_prompt = nullptr;
+    p.logits_filter_callback = stop_loops;
 
     if (whisper_full(ctx, p, pcm, n) == 0) {
+        std::vector<int> ids;
+        std::vector<std::string> texts;
         const int ns = whisper_full_n_segments(ctx);
         for (int i = 0; i < ns; i++) {
-            r.text += whisper_full_get_segment_text(ctx, i);
             const int nt = whisper_full_n_tokens(ctx, i);
-            for (int j = 0; j < nt; j++) if (whisper_full_get_token_id(ctx, i, j) < whisper_token_eot(ctx)) r.tokens++;
+            for (int j = 0; j < nt; j++) {
+                const int id = whisper_full_get_token_id(ctx, i, j);
+                if (id >= whisper_token_eot(ctx)) continue; // special tokens
+                ids.push_back(id);
+                texts.push_back(whisper_full_get_token_text(ctx, i, j));
+            }
         }
+        r.tokens = (int) ids.size();
+        // a loop that was stopped: keep its words once
+        for (int u; (u = repeated_tail(ids)) > 0;) {
+            const int keep = (int) ids.size() - (u == 1 ? 3 : 2 * u);
+            ids.resize(keep);
+            texts.resize(keep);
+        }
+        for (const auto & t : texts) r.text += t;
     } else {
         r.text.clear();
         r.tokens = -1;
