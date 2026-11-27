@@ -125,7 +125,10 @@ public class WhisperPlugin extends Plugin {
                 if (ctx == 0) {
                     ctx = WhisperNative.load(model.getAbsolutePath(), getContext().getApplicationInfo().nativeLibraryDir);
                     if (ctx == 0) {
-                        model.delete(); // most likely a damaged file: download again next time
+                        // The file passed its checksum when it was downloaded: delete it only if it no longer matches
+                        // (a phone short of memory or without a usable CPU backend would otherwise download it again
+                        // on every attempt)
+                        if (sha == null || sha.isEmpty() || !sha256(model).equalsIgnoreCase(sha)) model.delete();
                         call.reject("The Qur’an AI model could not be loaded.", "run");
                         return;
                     }
@@ -247,6 +250,7 @@ public class WhisperPlugin extends Plugin {
     private void fetch(String url, File part) throws IOException {
         long have = part.isFile() ? part.length() : 0;
         String u = url;
+        if (!u.startsWith("https://")) throw new DownloadError("The Qur’an AI model could not be downloaded (not https).");
         HttpURLConnection c = null;
         for (int hop = 0; hop < 6; hop++) { // GitHub release assets redirect to their storage host
             c = (HttpURLConnection) new URL(u).openConnection();
@@ -258,6 +262,7 @@ public class WhisperPlugin extends Plugin {
             int code = c.getResponseCode();
             if (code >= 300 && code < 400 && c.getHeaderField("Location") != null) {
                 u = new URL(new URL(u), c.getHeaderField("Location")).toString();
+                if (!u.startsWith("https://")) { c.disconnect(); throw new DownloadError("The Qur’an AI model could not be downloaded (insecure redirect)."); }
                 c.disconnect();
                 continue;
             }

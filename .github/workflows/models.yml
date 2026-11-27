@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false # the job runs third-party code (pip packages, model files): no write token on disk
       - uses: actions/setup-node@v4
         with:
           node-version: 22

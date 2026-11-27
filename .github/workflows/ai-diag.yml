@@ -5,6 +5,9 @@ name: Qur'an AI engine check (real model)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   browser:
     runs-on: ubuntu-latest
