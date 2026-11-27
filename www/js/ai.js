@@ -269,10 +269,11 @@ export function createAiEngine({ onPartial, onFinal, onError, onLoad }) {
       // made inside the tap, before anything is awaited, so the browser lets it run
       try { ctx = new AC({ sampleRate: RATE }); } catch (_) { ctx = new AC(); }
       ctx.resume().catch(() => {});
-      // Natively a pass costs in proportion to the clip, and whole verses come out right (tests/native): a long phrase
-      // is split only at a real pause, as a part starting mid-verse loses its context (heard in the emulator: "غير |
-      // المغضوب عليهم" came out as "غيرهم | فاغضوا بعليهم").
-      streamer = createStreamer({ transcribe, onPartial, onFinal, ...(NW ? { splitAfter: 12 } : {}) });
+      // Natively a pass costs in proportion to the clip, and whole verses come out right (tests/native), so a long
+      // phrase is split only at a real pause; and each phrase starts with the end of the one before (preroll), as a
+      // part starting mid-verse loses its context: in the emulator "غير | المغضوب عليهم" came out as "غيرهم |
+      // فاخضوا بعليهم" ("ghayri-l-maghdub" split after "ghayri"). A repeated word is never a mistake (match.js).
+      streamer = createStreamer({ transcribe, onPartial, onFinal, ...(NW ? { splitAfter: 12, preroll: 1.3 } : {}) });
       sessions++; counted = true; clearTimeout(idleT); idleT = 0;
       try {
         await loadModel(onLoad);
