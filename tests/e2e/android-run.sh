@@ -9,14 +9,16 @@ stdbuf -oL adb logcat -v time -b main -b system -b crash -b kernel '*:W' TilawaW
 (while true; do echo "$(date +%T) host: $(free -m | awk 'NR==2{print "used",$3,"avail",$7}') load $(cut -d' ' -f1 /proc/loadavg); guest: $(adb shell cat /proc/meminfo 2>/dev/null | awk '/MemAvailable/{print "avail",$2}') $(adb shell cat /proc/loadavg 2>/dev/null | cut -d' ' -f1)"; sleep 5; done) > mem.txt 2>&1 &
 alive() { if pgrep -f qemu-system > /dev/null; then echo "emulator alive"; else echo "EMULATOR GONE"; fi; }
 run() { timeout 420 env ANDROID=1 "$@" node tests/e2e/ai-browser.cjs; echo "exit $?"; alive; }
-run FAKE_MIC=/diag.wav SECONDS=3 CLIPS=1 STRESS=90 NATIVE="{\"model\":\"$M\",\"margin\":1}"
-run FAKE_MIC=/diag.wav SECONDS=150 NATIVE="{\"model\":\"$M\",\"margin\":1}"
-run FAKE_MIC=/diag2.wav SECONDS=150 NATIVE="{\"model\":\"$M\",\"margin\":1}"
-run FAKE_MIC=/diag.wav SECONDS=150 NATIVE="{\"model\":\"$M\",\"margin\":-1}"
+# One engine thread while the recording plays: with more, the emulator itself (not the app) has been found to quit
+# about 45 s into the recitation every time (no host or guest memory pressure; 90 s of the engine alone is fine).
+run FAKE_MIC=/diag.wav SECONDS=150 CLIPS=1 NATIVE="{\"model\":\"$M\",\"margin\":1,\"threads\":1}"
+run FAKE_MIC=/diag2.wav SECONDS=150 NATIVE="{\"model\":\"$M\",\"margin\":1,\"threads\":1}"
+run FAKE_MIC=/diag.wav SECONDS=150 NATIVE="{\"model\":\"$M\",\"margin\":-1,\"threads\":1}"
 run FAKE_MIC=/diag.wav SECONDS=3 CLIPS=1 NATIVE="{\"model\":\"$M\",\"margin\":1,\"threads\":4}" 2>&1 | grep -E 'CLIPS|ctx|full window|Qur’an model|exit|emulator|EMULATOR'
-echo "--- memory"; tail -60 mem.txt
+run FAKE_MIC=/diag.wav SECONDS=150 NATIVE="{\"model\":\"$M\",\"margin\":1}"
+echo "--- memory"; tail -8 mem.txt
 echo "--- host kernel"; sudo dmesg | tail -20
 echo "--- emulator crash reports"; ls -la /tmp/android-runner/ 2>/dev/null; ls -la ~/.android/ 2>/dev/null | head
-echo "--- logcat"; grep -v 'whisper_model_load\|whisper_init\|whisper_backend' logcat.txt | tail -120
+echo "--- logcat"; grep -E 'TilawaWhisper|AndroidRuntime|FATAL|lowmemory|ActivityManager: (Kill|Process)' logcat.txt | grep -v 'whisper_model_load\|whisper_init\|whisper_backend' | tail -40
 kill %1 %2 2>/dev/null
 exit 0

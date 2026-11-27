@@ -145,7 +145,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: [base-q8_0]
+        model: [base-q8_0, tiny-q8_0]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
