@@ -1,0 +1,17 @@
+# Desktop build of the benchmark: cmake -S tests/native -B build -DWHISPER_DIR=<whisper.cpp v1.9.5 checkout>
+cmake_minimum_required(VERSION 3.22)
+project(tilawa_bench C CXX)
+set(CMAKE_CXX_STANDARD 17)
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif ()
+set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(WHISPER_BUILD_EXAMPLES ON CACHE BOOL "" FORCE) # whisper-quantize
+set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+add_subdirectory(${WHISPER_DIR} whisper)
+set(APP_CPP ${CMAKE_CURRENT_SOURCE_DIR}/../../android/app/src/main/cpp)
+add_executable(tilawa-bench bench.cpp ${APP_CPP}/tw.cpp)
+target_include_directories(tilawa-bench PRIVATE ${APP_CPP})
+target_link_libraries(tilawa-bench PRIVATE whisper ggml)

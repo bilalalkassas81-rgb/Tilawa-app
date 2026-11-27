@@ -1,0 +1,119 @@
+name: Qur'an AI models for the Android app (ggml)
+
+# Converts Tarteel AI's Qur'an Whisper models (Apache-2.0) to whisper.cpp's ggml format, quantizes them, publishes
+# them once as assets of the release `models-v1` (the app downloads from there), and benchmarks the Android engine's
+# exact decoding (android/app/src/main/cpp/tw.cpp) on real recitation of Al-Fatiha.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ccr-ac57e0d6-fjuemr]
+    paths: ['.github/workflows/models.yml', 'tests/native/**']
+
+permissions:
+  contents: write
+
+env:
+  WHISPER_TAG: v1.9.5
+  TAG: models-v1
+
+jobs:
+  models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg ninja-build >/dev/null
+          pip install -q torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install -q transformers==4.46.3 huggingface_hub==0.26.5 'numpy<2' safetensors
+          git clone -q --depth 1 --branch $WHISPER_TAG https://github.com/ggml-org/whisper.cpp
+          git clone -q --depth 1 --branch v20240930 https://github.com/openai/whisper openai-whisper
+          cmake -S tests/native -B build -G Ninja -DWHISPER_DIR=$PWD/whisper.cpp -DGGML_NATIVE=ON > /dev/null
+          ninja -C build tilawa-bench whisper-quantize > /dev/null
+          ls -la build/tilawa-bench build/bin/whisper-quantize
+
+      - name: Convert and quantize
+        run: |
+          mkdir -p out
+          for m in base tiny; do
+            python - <<EOF
+          from huggingface_hub import snapshot_download
+          import os
+          d = snapshot_download('tarteel-ai/whisper-$m-ar-quran', local_dir='hf/$m', allow_patterns=['*.json', '*.bin', '*.safetensors', '*.txt'], ignore_patterns=['training_args.bin', 'optimizer*', 'rng_state*', 'scheduler*'])
+          # the converter reads the tokenizer from the model's folder: take OpenAI's where the fine-tune has none
+          for f in ['vocab.json', 'added_tokens.json']:
+              if not os.path.exists(os.path.join(d, f)):
+                  snapshot_download('openai/whisper-$m', local_dir=d, allow_patterns=[f])
+          print(sorted(os.listdir(d)))
+          EOF
+            python whisper.cpp/models/convert-h5-to-ggml.py hf/$m openai-whisper hf/$m > convert-$m.log
+            tail -2 convert-$m.log
+            mv hf/$m/ggml-model.bin out/ggml-tarteel-$m-f16.bin
+            for q in q8_0 q5_1; do build/bin/whisper-quantize out/ggml-tarteel-$m-f16.bin out/ggml-tarteel-$m-$q.bin $q > /dev/null; done
+          done
+          cd out && sha256sum *.bin | tee SHA256SUMS && ls -l
+
+      - name: Recitation (EveryAyah, Al-Fatiha)
+        run: |
+          for r in Alafasy_128kbps Husary_128kbps; do
+            mkdir -p audio/$r
+            for v in 1 2 3 4 5 6 7; do
+              f=$(printf '001%03d' $v)
+              curl -sSfL -o audio/$r/$f.mp3 https://everyayah.com/data/$r/$f.mp3
+              ffmpeg -loglevel error -y -i audio/$r/$f.mp3 -ac 1 -ar 16000 -c:a pcm_s16le audio/$r/$f.wav
+            done
+            (cd audio/$r && ls *.mp3 | sed 's/^/file /' > list.txt && ffmpeg -loglevel error -y -f concat -safe 0 -i list.txt -ac 1 -ar 16000 -c:a pcm_s16le ../$r-all.wav)
+          done
+
+      - name: Benchmark (4 threads; margin -1 = full 30 s window)
+        run: |
+          for m in base tiny; do for q in f16 q8_0 q5_1; do for margin in -1 1 0.5; do
+            M=out/ggml-tarteel-$m-$q.bin
+            for r in Alafasy_128kbps Husary_128kbps; do
+              build/tilawa-bench $M 4 $margin 1 audio/$r/001*.wav 2>/dev/null > b.jsonl
+              node tests/native/score.mjs "$m $q margin=$margin $r" < b.jsonl 2>/dev/null
+            done
+            build/tilawa-bench $M 4 $margin 1 audio/Alafasy_128kbps-all.wav --clips 1,5,15 --repeat 3 2>/dev/null | node -e "
+              const l=require('fs').readFileSync(0,'utf8').trim().split('\n').map(JSON.parse), g={};
+              l.forEach(r=>(g[r.sec]=g[r.sec]||[]).push(r.ms));
+              console.log('CLIPS $m $q margin=$margin', Object.entries(g).map(([s,a])=>s+'s: '+a.sort((x,y)=>x-y)[1]+' ms').join(', '))"
+          done; done; done
+          # beam 2 on the candidates
+          for M in out/ggml-tarteel-base-q8_0.bin out/ggml-tarteel-tiny-q8_0.bin; do
+            for r in Alafasy_128kbps Husary_128kbps; do
+              build/tilawa-bench $M 4 1 2 audio/$r/001*.wav 2>/dev/null > b.jsonl
+              node tests/native/score.mjs "$M beam2 margin=1 $r" < b.jsonl 2>/dev/null
+            done
+          done
+          nproc; lscpu | grep 'Model name'
+
+      - name: Is the release already published?
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view $TAG --json assets -q '.assets[].name' 2>/dev/null | grep -q ggml-tarteel; then echo "exists=1" >> $GITHUB_OUTPUT; echo "already published: not replaced"; gh release view $TAG --json assets -q '.assets[] | "\(.name) \(.size)"'; else echo "exists=0" >> $GITHUB_OUTPUT; fi
+
+      - name: Publish (once)
+        if: steps.rel.outputs.exists == '0'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: models-v1
+          name: Qur'an AI models for the Android app (v1)
+          make_latest: false
+          files: |
+            out/ggml-tarteel-base-q8_0.bin
+            out/ggml-tarteel-base-q5_1.bin
+            out/ggml-tarteel-tiny-q8_0.bin
+            out/ggml-tarteel-tiny-q5_1.bin
+            out/SHA256SUMS
+          body: |
+            Tarteel AI's Qur'an speech models ([whisper-base-ar-quran](https://huggingface.co/tarteel-ai/whisper-base-ar-quran), [whisper-tiny-ar-quran](https://huggingface.co/tarteel-ai/whisper-tiny-ar-quran), Apache-2.0), converted to [whisper.cpp](https://github.com/ggml-org/whisper.cpp) ${{ env.WHISPER_TAG }}'s ggml format and quantized (q8_0, q5_1) by the workflow `models.yml`. The Tilawa Android app downloads one of these once, for its Qur'an AI voice engine. Not an app release: the app is under **latest**.
