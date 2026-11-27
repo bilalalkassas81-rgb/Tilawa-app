@@ -52,6 +52,13 @@ jobs:
           for f in ['vocab.json', 'added_tokens.json']:
               if not os.path.exists(os.path.join(d, f)):
                   snapshot_download('openai/whisper-$m', local_dir=d, allow_patterns=[f])
+          # the converter takes max_length as the decoder's context size; these fine-tunes set it to 1024 for generation,
+          # but the decoder has max_target_positions (448) positions
+          import json
+          c = json.load(open(os.path.join(d, 'config.json')))
+          print('max_length', c.get('max_length'), 'max_target_positions', c.get('max_target_positions'))
+          c['max_length'] = c['max_target_positions']
+          json.dump(c, open(os.path.join(d, 'config.json'), 'w'), indent=2)
           print(sorted(os.listdir(d)))
           EOF
             python whisper.cpp/models/convert-h5-to-ggml.py hf/$m openai-whisper hf/$m > convert-$m.log
