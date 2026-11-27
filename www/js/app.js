@@ -4,7 +4,7 @@ import { AI_MB, aiInfo, loadModel, modelLoaded, modelCached, unloadModel } from 
 import { db, save, today, logDaily, streak, exportJSON, importJSON, putRecording, getRecording, deleteRecording } from './store.js';
 import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr, BASMALA } from './meta.js';
 
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 function h(tag, attrs, ...kids) {
