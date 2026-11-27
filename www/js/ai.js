@@ -192,7 +192,6 @@ function pcm16(audio) {
 }
 async function transcribeNative(audio) {
   const sec = audio.length / RATE, t = performance.now();
-  if (NATIVE.dry) { await new Promise((r) => setTimeout(r, NATIVE.dry)); return ''; } // diagnostics: the engine without the model
   const r = await Promise.race([
     NW.transcribe({ audio: pcm16(audio), audioCtx: ctxFor(sec), beam: NATIVE.beam }),
     new Promise((_, rej) => setTimeout(() => rej(new Error('The Qur’an model took too long.')), 60000)),
