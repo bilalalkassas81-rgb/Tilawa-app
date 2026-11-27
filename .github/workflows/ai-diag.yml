@@ -138,14 +138,15 @@ jobs:
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep '\.so$'
 
   android:
-    name: Emulator, native ${{ matrix.model }}
+    name: Emulator, native ${{ matrix.model }}, ${{ matrix.gpu }}
     needs: apk
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        model: [base-q8_0, tiny-q8_0, base-q5_1, tiny-q5_1]
+        model: [base-q8_0, tiny-q8_0]
+        gpu: [swangle_indirect, guest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -170,13 +171,10 @@ jobs:
           api-level: 34
           arch: x86_64
           target: google_apis
-          # 2 of the runner's 4 cores: with 4, the emulator itself quit about 45 s into every recitation with the
-          # engine running (not without the engine, nor the engine without the recording): the host needs room for
-          # the emulator's own audio and display threads
-          cores: 2
+          cores: 4
           ram-size: 4096M
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none -no-snapshot
+          emulator-options: -no-window -gpu ${{ matrix.gpu }} -no-boot-anim -camera-back none -no-snapshot
           script: |
             adb install -r app-debug.apk
             adb shell pm grant app.tilawa.quran android.permission.RECORD_AUDIO
