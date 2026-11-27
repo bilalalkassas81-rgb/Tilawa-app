@@ -1,0 +1,181 @@
+name: Qur'an AI engine check (real model)
+
+# Manual only: downloads the real models and runs the app with real recitation as the microphone, in Chromium (web
+# engine) and in an Android emulator (native engine: debug APK, then tests/e2e/android-run.sh per model).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: desktop (app default)
+            ua: ''
+          - name: phone user agent (app default)
+            ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36'
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Recitation audio (EveryAyah, Al-Fatiha)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+          mkdir -p audio
+          for r in Alafasy_128kbps Husary_128kbps; do
+            mkdir -p audio/$r
+            for v in 1 2 3 4 5 6 7; do
+              f=$(printf '001%03d' $v)
+              curl -sSfL -o audio/$r/$f.mp3 https://everyayah.com/data/$r/$f.mp3
+            done
+            (cd audio/$r && ls *.mp3 | sed 's/^/file /' > list.txt && ffmpeg -loglevel error -y -f concat -safe 0 -i list.txt -ac 1 -ar 48000 cat.wav)
+            # for the fake microphone: 3 s of silence, the seven verses, 30 s of silence
+            ffmpeg -loglevel error -y -f lavfi -t 3 -i anullsrc=r=48000:cl=mono -i audio/$r/cat.wav -f lavfi -t 30 -i anullsrc=r=48000:cl=mono \
+              -filter_complex '[0:a][1:a][2:a]concat=n=3:v=0:a=1' -c:a pcm_s16le audio/$r.wav
+          done
+
+      - name: Install Playwright
+        run: |
+          npm i --no-save --no-package-lock playwright@1.49.1
+          npx playwright install --with-deps chromium
+
+      - name: Serve the app
+        run: |
+          nohup npx --yes http-server www -p 8080 -c-1 -s > /dev/null 2>&1 &
+          sleep 5; curl -sSf -o /dev/null http://localhost:8080/ && echo serving
+
+      - name: Alafasy
+        continue-on-error: true
+        env:
+          UA: ${{ matrix.ua }}
+        run: WAV=$PWD/audio/Alafasy_128kbps.wav SECONDS=150 node tests/e2e/ai-browser.cjs
+
+      - name: Husary
+        continue-on-error: true
+        env:
+          UA: ${{ matrix.ua }}
+        run: WAV=$PWD/audio/Husary_128kbps.wav SECONDS=150 node tests/e2e/ai-browser.cjs
+
+  apk:
+    name: Debug APK for the emulator (x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - uses: actions/cache@v4
+        with:
+          path: |
+            android/app/.cxx
+            android/app/build/whisper-src-v1.9.5
+          key: cxx-x86_64-${{ hashFiles('android/app/src/main/cpp/CMakeLists.txt', 'android/app/build.gradle') }}
+      - name: Recitation audio, played in the app as the microphone
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+          for r in Alafasy_128kbps Husary_128kbps; do
+            mkdir -p audio/$r
+            for v in 1 2 3 4 5 6 7; do curl -sSfL -o audio/$r/$(printf '001%03d' $v).mp3 https://everyayah.com/data/$r/$(printf '001%03d' $v).mp3; done
+            (cd audio/$r && ls *.mp3 | sed 's/^/file /' > list.txt && ffmpeg -loglevel error -y -f concat -safe 0 -i list.txt -ac 1 -ar 48000 cat.wav)
+          done
+          # 3 s of silence, the seven verses, 30 s of silence, in the app's web folder (debug build only)
+          ffmpeg -loglevel error -y -f lavfi -t 3 -i anullsrc=r=48000:cl=mono -i audio/Alafasy_128kbps/cat.wav -f lavfi -t 30 -i anullsrc=r=48000:cl=mono \
+            -filter_complex '[0:a][1:a][2:a]concat=n=3:v=0:a=1' -ac 1 -ar 22050 -c:a pcm_s16le www/diag.wav
+          ffmpeg -loglevel error -y -f lavfi -t 3 -i anullsrc=r=48000:cl=mono -i audio/Husary_128kbps/cat.wav -f lavfi -t 30 -i anullsrc=r=48000:cl=mono \
+            -filter_complex '[0:a][1:a][2:a]concat=n=3:v=0:a=1' -ac 1 -ar 22050 -c:a pcm_s16le www/diag2.wav
+          ls -la www/diag*.wav
+      - name: Build
+        run: |
+          ls $ANDROID_HOME/ndk $ANDROID_HOME/cmake || true
+          npm ci
+          npx cap sync android
+          cd android && chmod +x gradlew && time ./gradlew assembleDebug --no-daemon -q -PtilawaAbis=x86_64
+          ls -la app/build/outputs/apk/debug/
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep '\.so$'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 3
+
+  arm:
+    name: Native engine for phones (arm64-v8a, armeabi-v7a) builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - name: Build
+        run: |
+          npm ci
+          npx cap sync android
+          cd android && chmod +x gradlew && time ./gradlew assembleDebug --no-daemon -q -PtilawaAbis=arm64-v8a,armeabi-v7a
+          ls -la app/build/outputs/apk/debug/
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep '\.so$'
+
+  android:
+    name: Emulator, native ${{ matrix.model }}
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [base-q8_0, tiny-q8_0]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: debug-apk
+
+      - name: Playwright (Android WebView driver)
+        run: npm i --no-save --no-package-lock playwright@1.49.1
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: The app in the emulator with the native engine
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          cores: 4
+          # (the default renderer, swiftshader_indirect, made the emulator quit when the page scrolled with the engine busy)
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swangle_indirect -no-boot-anim -camera-back none -no-snapshot
+          script: |
+            adb install -r app-debug.apk
+            adb shell pm grant app.tilawa.quran android.permission.RECORD_AUDIO
+            sh tests/e2e/android-run.sh ${{ matrix.model }}

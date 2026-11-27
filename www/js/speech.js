@@ -1,6 +1,6 @@
 // Speech recognition: native plugin inside the Android/iOS app, Web Speech API in browsers, or (when chosen) the
 // on-device Qur'an AI model. Exposes one interface: start(), stop(), cut(), active, onPartial/onFinal/onState callbacks.
-import { aiSupported, createAiEngine } from './ai.js';
+import { aiSupported, createAiEngine, aiInfo, aiTooSlow } from './ai.js';
 
 const Cap = window.Capacitor;
 const isNative = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
@@ -137,7 +137,13 @@ export function createRecognizer({ lang = 'ar-SA', engine = 'phone', onPartial: 
       onError: (e) => { if (!want) return; want = false; onError && onError(e); const a = ai; a && a.stop().then(() => { if (ai === a && !want) set('idle'); }); },
     });
     set('starting');
-    if ((await ai.start()) && want) set('listening'); // false: stopped before it was listening
+    const ok = await ai.start();
+    // The warm-up pass says how fast this device is: one this slow can't follow along (ai.js has the limits).
+    if (ok && aiTooSlow()) {
+      const a = ai; await a.stop();
+      throw new Error(`This device is too slow for the Qur’an AI model (one pass takes ${(aiInfo.ms / 1000).toFixed(1)} s).`);
+    }
+    if (ok && want) set('listening'); // false: stopped before it was listening
   }
 
   return {

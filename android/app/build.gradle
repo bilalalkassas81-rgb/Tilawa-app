@@ -16,6 +16,26 @@ android {
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
+        // The native Qur'an AI engine (whisper.cpp, src/main/cpp). Optimised in debug builds too (see CMakeLists.txt).
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_shared", "-DCMAKE_BUILD_TYPE=Release"
+            }
+        }
+    }
+    ndkVersion "27.3.13750724"
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+    // ggml picks its CPU backend for this phone from the app's native library folder: the libraries must be there
+    // as files, not only inside the APK
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
     // One fixed signing key, so updates install over the old app and keep your data.
     // The key file is in the repo but locked with a password that lives only in the
@@ -29,8 +49,14 @@ android {
             keyPassword System.getenv("TILAWA_KEY_PASSWORD")
         }
     }
+    // Phones are ARM; x86_64 is for the emulator (debug builds). -PtilawaAbis=x86_64 builds just one.
+    def abis = project.findProperty('tilawaAbis')
     buildTypes {
+        debug {
+            ndk { abiFilters(*(abis ? abis.split(',') : ['arm64-v8a', 'armeabi-v7a', 'x86_64'])) }
+        }
         release {
+            ndk { abiFilters(*(abis ? abis.split(',') : ['arm64-v8a', 'armeabi-v7a'])) }
             signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

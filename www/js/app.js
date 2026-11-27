@@ -1,10 +1,10 @@
 import { normalize, tokens, buildUnits, align, findVerses } from './match.js';
 import { createRecognizer, speechSupport, speechReady, inClaude, isNative, startVoiceRecording, aiAvailable } from './speech.js';
-import { AI_MB, aiInfo, loadModel, modelLoaded, modelCached, unloadModel } from './ai.js';
+import { AI_MB, aiInfo, aiLabel, nativeAi, nativeChosen, loadModel, modelLoaded, modelCached, unloadModel } from './ai.js';
 import { db, save, today, logDaily, streak, exportJSON, importJSON, putRecording, getRecording, deleteRecording } from './store.js';
 import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr, BASMALA } from './meta.js';
 
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 function h(tag, attrs, ...kids) {
@@ -1298,7 +1298,7 @@ function renderSettings() {
   renderVoice();
   $('#s-reminder').value = P.reminder || '';
   $('#s-rem-note').textContent = plugin('LocalNotifications') ? 'A notification at this time each day.' : 'Daily notifications work in the Android app. Here, add the page to your home screen and set a phone alarm.';
-  $('#s-ver').textContent = `Version ${VERSION} · ${isNative ? 'Android app' : 'Web app'} · voice: ${useAi() ? `Qur’an AI${aiInfo.device ? ' (' + aiInfo.device + ')' : ''}` : speechSupport}`;
+  $('#s-ver').textContent = `Version ${VERSION} · ${isNative ? 'Android app' : 'Web app'} · voice: ${useAi() ? `Qur’an AI${aiInfo.device ? ` (${aiLabel()})` : nativeAi ? ' (native)' : ''}` : speechSupport}`;
 }
 // Voice engine: the phone's own speech recognition, or the Qur'an AI model downloaded once and run on this device.
 function renderVoice() {
@@ -1308,12 +1308,13 @@ function renderVoice() {
   if (!useAi()) $('#s-dl').hidden = true;
   if (!ok) note.textContent = inClaude ? 'The Qur’an AI model works in the Android app and the web app, not on this preview link.' : 'The Qur’an AI model needs a newer browser with microphone access.';
   else if (!useAi()) note.textContent = `Your phone’s Arabic dictation (Google or Apple). Needs internet. The Qur’an AI model follows recitation more closely: a one-time download of about ${AI_MB} MB, then it works offline.`;
-  else if (modelLoaded()) note.textContent = 'Tarteel AI’s Qur’an model, running on this device. Works offline.';
+  else if (modelLoaded()) note.textContent = `Tarteel AI’s Qur’an model, running ${nativeAi ? 'natively on this phone' : 'on this device'}. Works offline.`;
   else {
-    note.textContent = `Tarteel AI’s Qur’an model, running on this device. A one-time download of about ${AI_MB} MB, then it works offline.`;
-    modelCached().then((c) => { if (c && useAi() && !modelLoaded() && $('#s-dl').hidden) note.textContent = 'Tarteel AI’s Qur’an model, running on this device. Downloaded: works offline.'; });
+    note.textContent = `Tarteel AI’s Qur’an model, running ${nativeAi ? 'natively on this phone' : 'on this device'}. A one-time download of about ${AI_MB} MB, then it works offline.`;
+    modelCached().then((c) => { if (c && useAi() && !modelLoaded() && $('#s-dl').hidden) note.textContent = `Tarteel AI’s Qur’an model, running ${nativeAi ? 'natively on this phone' : 'on this device'}. Downloaded: works offline.`; });
   }
 }
+nativeChosen.then(() => { try { renderVoice(); } catch (_) {} }); // the download size for this phone
 $('#s-voice').addEventListener('change', (e) => {
   P.voice = e.target.value; save(); renderSettings();
   if (!useAi()) { unloadModel(); return; }

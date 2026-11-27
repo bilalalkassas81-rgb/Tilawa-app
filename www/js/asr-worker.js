@@ -17,6 +17,19 @@ self.onmessage = async ({ data: m }) => {
   }
 };
 
+// Hugging Face sometimes answers a file request with a passing error (seen: 405, 429, 5xx) or drops it: try again
+// before giving up on a model. The library fetches through the global fetch, so this covers the model files too.
+const net = self.fetch.bind(self);
+const RETRY = [405, 408, 425, 429, 500, 502, 503, 504];
+self.fetch = async (url, opts) => {
+  for (let i = 0; ; i++) {
+    let r = null, err = null;
+    try { r = await net(url, opts); } catch (e) { err = e; }
+    if ((r && !RETRY.includes(r.status)) || i >= 3) { if (r) return r; throw err; }
+    await new Promise((res) => setTimeout(res, 800 * 2 ** i));
+  }
+};
+
 // The library and the ONNX runtime are kept in the Cache API (as the model files are by the library), so the engine
 // works offline after first use, also in the Android app, where no service worker runs.
 async function cached(url) {
@@ -44,7 +57,7 @@ async function load({ lib, models }) {
   let err = null, ran = false;
   for (const c of models) {
     if (c.device === 'webgpu' && !gpu) continue;
-    let p = null, x = {}, gone = false;
+    let p = null, x = {}, gone = false, ms = 0;
     try {
       await Promise.race([new Promise((_, rej) => (abort = rej)), (async () => {
         const q = await pipeline('automatic-speech-recognition', c.id, {
@@ -56,9 +69,10 @@ async function load({ lib, models }) {
         // Some exports carry an old generation config without the language tokens: give them from the tokenizer.
         const g = p.model.generation_config || {}, ids = p.tokenizer.model.tokens_to_ids;
         if (!(g.lang_to_id && g.lang_to_id['<|ar|>'] != null)) x = { is_multilingual: true, lang_to_id: { '<|ar|>': ids.get('<|ar|>') }, task_to_id: { transcribe: ids.get('<|transcribe|>') }, no_timestamps_token_id: g.no_timestamps_token_id ?? ids.get('<|notimestamps|>') };
-        await run(p, new Float32Array(16000), x); // compiles the model now, and fails here rather than mid-recitation
+        // compiles the model now, and fails here rather than mid-recitation; its time is about that of every run
+        const t = performance.now(); await run(p, new Float32Array(16000), x); ms = Math.round(performance.now() - t);
       })()]);
-      asr = p; extra = x; info = { device: c.device, model: c.id };
+      asr = p; extra = x; info = { device: c.device, model: c.id, dtype: c.dtype, ms };
       return;
     } catch (e) {
       gone = true; err = e; console.warn('Tilawa: could not use', c.id, 'on', c.device, e);
