@@ -1,6 +1,6 @@
 import { normalize, tokens, buildUnits, align, findVerses } from './match.js';
 import { createRecognizer, speechSupport, speechReady, inClaude, isNative, startVoiceRecording, aiAvailable } from './speech.js';
-import { AI_MB, aiInfo, aiLabel, nativeAi, loadModel, modelLoaded, modelCached, unloadModel } from './ai.js';
+import { AI_MB, aiInfo, aiLabel, nativeAi, nativeChosen, loadModel, modelLoaded, modelCached, unloadModel } from './ai.js';
 import { db, save, today, logDaily, streak, exportJSON, importJSON, putRecording, getRecording, deleteRecording } from './store.js';
 import { JUZ, juzOf, RECITERS, audioUrl, LANGS, TOTAL_VERSES, toAr, BASMALA } from './meta.js';
 
@@ -1314,6 +1314,7 @@ function renderVoice() {
     modelCached().then((c) => { if (c && useAi() && !modelLoaded() && $('#s-dl').hidden) note.textContent = `Tarteel AI’s Qur’an model, running ${nativeAi ? 'natively on this phone' : 'on this device'}. Downloaded: works offline.`; });
   }
 }
+nativeChosen.then(() => { try { renderVoice(); } catch (_) {} }); // the download size for this phone
 $('#s-voice').addEventListener('change', (e) => {
   P.voice = e.target.value; save(); renderSettings();
   if (!useAi()) { unloadModel(); return; }

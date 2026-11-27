@@ -33,7 +33,7 @@ import java.util.concurrent.Executors;
  * load({url, file, sha256?, size?, threads?, warmCtx?}): downloads the model once into the app's files (progress
  *   events "progress" {loaded, total}), loads it and times one pass -> {model, ms, threads, cores, system}
  * transcribe({audio: base64 16-bit PCM, 16 kHz mono, audioCtx?, beam?}) -> {text, ms, tokens, audioCtx}
- * unload(), cached({file}) -> {cached, size}
+ * unload(), cached({file}) -> {cached, size}, device() -> {cores, mhz[], features, abi}
  * Every call runs in order on one background thread.
  */
 @CapacitorPlugin(name = "Whisper")
@@ -52,6 +52,38 @@ public class WhisperPlugin extends Plugin {
 
     private static String safeName(String f) {
         return f == null ? null : f.replaceAll("[^A-Za-z0-9._-]", "_");
+    }
+
+    /** What the app needs to pick a model size: cores, their top speeds (MHz), CPU features, ABI. */
+    @PluginMethod
+    public void device(PluginCall call) {
+        JSObject r = new JSObject();
+        int cores = Runtime.getRuntime().availableProcessors();
+        r.put("cores", cores);
+        r.put("abi", android.os.Build.SUPPORTED_ABIS.length > 0 ? android.os.Build.SUPPORTED_ABIS[0] : "");
+        com.getcapacitor.JSArray mhz = new com.getcapacitor.JSArray();
+        for (int i = 0; i < 16; i++) {
+            String f = readFirstLine("/sys/devices/system/cpu/cpu" + i + "/cpufreq/cpuinfo_max_freq");
+            if (f == null) continue;
+            try { mhz.put(Long.parseLong(f.trim()) / 1000); } catch (NumberFormatException ignored) {}
+        }
+        r.put("mhz", mhz);
+        String features = "";
+        try (java.io.BufferedReader b = new java.io.BufferedReader(new java.io.FileReader("/proc/cpuinfo"))) {
+            for (String l; (l = b.readLine()) != null;) {
+                if (l.startsWith("Features") || l.startsWith("flags")) { features = l.substring(l.indexOf(':') + 1).trim(); break; }
+            }
+        } catch (IOException ignored) {}
+        r.put("features", features);
+        call.resolve(r);
+    }
+
+    private static String readFirstLine(String path) {
+        try (java.io.BufferedReader b = new java.io.BufferedReader(new java.io.FileReader(path))) {
+            return b.readLine();
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     @PluginMethod

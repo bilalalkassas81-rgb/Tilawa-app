@@ -15,12 +15,30 @@ export const NATIVE_MODELS = {
   'tiny-q8_0': { file: 'ggml-tarteel-tiny-q8_0.bin', mb: 44, sha256: 'ef01ab441b004f9e6f1ea98d397b43452b3a45efab7c3928ab37af655dde8b52' },
   'tiny-q5_1': { file: 'ggml-tarteel-tiny-q5_1.bin', mb: 32, sha256: 'af8dfdd73c60b32e4e6d72e98e095e33fbeb04b9d39508580d051aa28202c646' },
 };
-// model: which of the above. margin: the encoder hears the clip plus this many seconds instead of Whisper's whole 30 s
-// window (-1 = the whole window), which makes a short phrase many times cheaper. beam: 1 = greedy.
-// (window.__tilawaNative overrides these, for the diagnostic tests.)
-export const NATIVE = { model: 'base-q8_0', margin: 1, beam: 1, ...(typeof window === 'object' && window.__tilawaNative) };
-const NM = NATIVE_MODELS[NATIVE.model] || NATIVE_MODELS['base-q8_0'];
+// model: which of the above ('' = chosen for the phone, see pickNative). margin: the encoder hears the clip plus this
+// many seconds instead of Whisper's whole 30 s window (-1 = the whole window), which makes a short phrase many times
+// cheaper. beam: 1 = greedy. threads: 0 = the plugin's choice. (window.__tilawaNative overrides these, for tests.)
+export const NATIVE = { model: '', margin: 1, beam: 1, threads: 0, ...(typeof window === 'object' && window.__tilawaNative) };
+let NM = NATIVE_MODELS[NATIVE.model] || NATIVE_MODELS['base-q8_0'];
 export const nativeAi = !!NW;
+// The base model follows best; the tiny one is 2.5 times faster (both measured in tests/native and the emulator).
+// Phones with at least 3 cores of 2.1 GHz or more and the ARMv8.2 dot product get base, others tiny. A model already
+// downloaded is kept.
+const nativePick = NW ? (async () => {
+  if (NATIVE_MODELS[NATIVE.model]) return NM;
+  for (const k of ['base-q8_0', 'tiny-q8_0']) {
+    const c = await NW.cached({ file: NATIVE_MODELS[k].file }).catch(() => ({}));
+    if (c.cached) { NM = NATIVE_MODELS[k]; AI_MB = NM.mb; return NM; }
+  }
+  const d = await NW.device().catch(() => ({}));
+  const fast = (d.mhz || []).filter((m) => m >= 2100).length;
+  const strong = fast >= 3 && (/asimddp/.test(d.features || '') || /x86/.test(d.abi || ''));
+  NM = NATIVE_MODELS[strong ? 'base-q8_0' : 'tiny-q8_0'];
+  AI_MB = NM.mb;
+  return NM;
+})() : null;
+/** Resolves once the Android app has chosen its model (AI_MB is then that model's size). */
+export const nativeChosen = nativePick ? nativePick.catch(() => {}) : Promise.resolve();
 const ctxFor = (sec) => (NATIVE.margin < 0 ? 0 : Math.min(1500, Math.ceil((sec + NATIVE.margin) * 50)));
 
 // Pinned: sw.js caches this exact version, and transformers.js fetches its ONNX runtime files from the same folder.
@@ -43,7 +61,7 @@ const TINY = [
 const phone = typeof navigator === 'object' && (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || '')));
 export const AI_MODELS = phone ? [...TINY, ...BASE.filter((m) => m.device === 'wasm')] : [...BASE, ...TINY];
 // shown before the first download: the model (and in the web app the runtime, about 22 MB)
-export const AI_MB = NW ? NM.mb : phone ? 85 : 100;
+export let AI_MB = NW ? NM.mb : phone ? 85 : 100; // native: updated once the model for this phone is chosen
 
 export const aiSupported = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && !!(window.AudioContext || window.webkitAudioContext)
   && (!!NW || (typeof WebAssembly === 'object' && typeof Worker === 'function'));
@@ -145,7 +163,9 @@ function loadNative() {
       loadCbs.forEach((cb) => cb(msg, a / b));
     });
     loadCbs.forEach((cb) => cb('Preparing the Qur’an model…', 0));
+    await nativePick;
     const r = await NW.load({ url: REL + NM.file, file: NM.file, sha256: NM.sha256, warmCtx: ctxFor(2), threads: NATIVE.threads || 0 });
+    // (a phone too slow even for this model falls back to the phone's recogniser: see aiTooSlow)
     Object.assign(aiInfo, { device: 'native', model: NM.file, ms: r.ms, threads: r.threads });
     console.log('Tilawa: Qur’an model (native):', JSON.stringify({ ...r, margin: NATIVE.margin, beam: NATIVE.beam }));
     const cbs = loadCbs; loadCbs = []; cbs.forEach((cb) => cb(null, 1, null));
@@ -172,6 +192,7 @@ function pcm16(audio) {
 }
 async function transcribeNative(audio) {
   const sec = audio.length / RATE, t = performance.now();
+  if (NATIVE.dry) { await new Promise((r) => setTimeout(r, NATIVE.dry)); return ''; } // diagnostics: the engine without the model
   const r = await Promise.race([
     NW.transcribe({ audio: pcm16(audio), audioCtx: ctxFor(sec), beam: NATIVE.beam }),
     new Promise((_, rej) => setTimeout(() => rej(new Error('The Qur’an model took too long.')), 60000)),
@@ -182,7 +203,7 @@ async function transcribeNative(audio) {
 
 /** Is a downloaded copy of the model kept (so it works offline)? */
 export async function modelCached() {
-  if (NW) { try { return !!(await NW.cached({ file: NM.file })).cached; } catch (_) { return false; } }
+  if (NW) { try { await nativePick; return !!(await NW.cached({ file: NM.file })).cached; } catch (_) { return false; } }
   try {
     const keys = await (await caches.open('transformers-cache')).keys();
     return AI_MODELS.some((m) => keys.some((k) => k.url.includes('/' + m.id + '/') && /\.onnx$/.test(k.url)));

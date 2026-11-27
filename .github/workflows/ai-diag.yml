@@ -138,14 +138,17 @@ jobs:
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep '\.so$'
 
   android:
-    name: Emulator, native ${{ matrix.model }}
+    name: Emulator, native ${{ matrix.model }} ${{ matrix.variant }}
     needs: apk
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        model: [base-q8_0, tiny-q8_0]
+        include:
+          - { model: base-q8_0, variant: '', x: '', opts: '' }
+          - { model: base-q8_0, variant: dry, x: ',"dry":300', opts: '' }
+          - { model: base-q8_0, variant: no-audio, x: '', opts: '-no-audio' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -173,8 +176,8 @@ jobs:
           cores: 4
           ram-size: 4096M
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none -no-snapshot
+          emulator-options: -no-window -gpu swiftshader_indirect -no-boot-anim -camera-back none -no-snapshot ${{ matrix.opts }}
           script: |
             adb install -r app-debug.apk
             adb shell pm grant app.tilawa.quran android.permission.RECORD_AUDIO
-            sh tests/e2e/android-run.sh ${{ matrix.model }}
+            sh tests/e2e/android-run.sh ${{ matrix.model }} '${{ matrix.x }}'
