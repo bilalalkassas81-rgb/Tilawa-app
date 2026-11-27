@@ -78,7 +78,7 @@ jobs:
           for m in base tiny; do for q in f16 q8_0 q5_1; do for margin in -1 1 0.5; do
             M=out/ggml-tarteel-$m-$q.bin
             for r in Alafasy_128kbps Husary_128kbps; do
-              build/tilawa-bench $M 4 $margin 1 audio/$r/001*.wav 2>/dev/null > b.jsonl
+              build/tilawa-bench $M 4 $margin 1 audio/$r/001*.wav 2>bench.err > b.jsonl || { tail -40 bench.err; exit 1; }
               node tests/native/score.mjs "$m $q margin=$margin $r" < b.jsonl 2>/dev/null
             done
             build/tilawa-bench $M 4 $margin 1 audio/Alafasy_128kbps-all.wav --clips 1,5,15 --repeat 3 2>/dev/null | node -e "

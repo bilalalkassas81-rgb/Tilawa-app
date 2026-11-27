@@ -23,10 +23,13 @@ FetchContent_Declare(whisper
     GIT_TAG        ${WHISPER_TAG}
     GIT_SHALLOW    TRUE
     GIT_PROGRESS   FALSE)
+file(MAKE_DIRECTORY ${FETCHCONTENT_BASE_DIR})
+file(LOCK ${FETCHCONTENT_BASE_DIR}/.lock GUARD FILE TIMEOUT 900) # ABIs may be configured at the same time
 FetchContent_GetProperties(whisper)
 if (NOT whisper_POPULATED)
     FetchContent_Populate(whisper)
 endif()
+file(LOCK ${FETCHCONTENT_BASE_DIR}/.lock RELEASE)
 execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${whisper_SOURCE_DIR} OUTPUT_VARIABLE got OUTPUT_STRIP_TRAILING_WHITESPACE)
 if (NOT got STREQUAL WHISPER_COMMIT)
     message(FATAL_ERROR "whisper.cpp ${WHISPER_TAG} is at ${got}, expected ${WHISPER_COMMIT}")
@@ -52,14 +55,31 @@ else ()
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 endif ()
 
-# every library next to the app's own (Android Studio packages what lands there); the CPU backends go to the
-# runtime output directory
-if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
-    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
-endif ()
 add_subdirectory(${whisper_SOURCE_DIR} whisper)
 
+# whisper.cpp writes its libraries to its own bin folder: put them next to the app's own instead, where Android
+# Studio packages them from (the CPU backends are not linked, so nothing else would pick them up)
+function(tilawa_collect dir)
+    get_property(ts DIRECTORY ${dir} PROPERTY BUILDSYSTEM_TARGETS)
+    foreach (t IN LISTS ts)
+        get_target_property(type ${t} TYPE)
+        if (type STREQUAL "SHARED_LIBRARY" OR type STREQUAL "MODULE_LIBRARY")
+            set_target_properties(${t} PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+        endif ()
+    endforeach ()
+    get_property(subs DIRECTORY ${dir} PROPERTY SUBDIRECTORIES)
+    foreach (d IN LISTS subs)
+        tilawa_collect(${d})
+    endforeach ()
+endfunction()
+if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+    tilawa_collect(${whisper_SOURCE_DIR})
+endif ()
+
 add_library(tilawa_whisper SHARED tw.cpp jni.cpp)
-target_link_libraries(tilawa_whisper PRIVATE whisper ggml log)
+target_link_libraries(tilawa_whisper PRIVATE whisper ggml)
+if (ANDROID)
+    target_link_libraries(tilawa_whisper PRIVATE log)
+endif ()
 target_compile_options(tilawa_whisper PRIVATE -O3 -fvisibility=hidden -ffunction-sections -fdata-sections)
 target_link_options(tilawa_whisper PRIVATE -Wl,--gc-sections)
