@@ -85,7 +85,10 @@ public class WhisperPlugin extends Plugin {
                 if (!model.isFile() || model.length() == 0) download(url, model, sha);
                 if (ctx != 0 && !file.equals(loadedFile)) { WhisperNative.free(ctx); ctx = 0; loadedFile = null; }
                 int cores = Runtime.getRuntime().availableProcessors();
-                threads = reqThreads != null && reqThreads > 0 ? reqThreads : Math.max(1, Math.min(4, cores));
+                // ggml's threads wait for each other by spinning: more threads than the cores free for them (the WebView and
+                // the microphone need some too) makes every step wait for a thread that is not running. Up to 4 on
+                // phones with 8 cores, half the cores on smaller ones.
+                threads = reqThreads != null && reqThreads > 0 ? reqThreads : cores >= 8 ? 4 : Math.max(1, cores / 2);
                 long t0 = System.currentTimeMillis();
                 if (ctx == 0) {
                     ctx = WhisperNative.load(model.getAbsolutePath(), getContext().getApplicationInfo().nativeLibraryDir);
@@ -104,9 +107,12 @@ public class WhisperPlugin extends Plugin {
                 java.util.Random rnd = new java.util.Random(1);
                 for (int i = 0; i < warm.length; i++) warm[i] = (float) (rnd.nextGaussian() * 0.002);
                 WhisperNative.transcribe(ctx, warm, threads, warmCtx, 1, st);
+                int first = st[0];
+                WhisperNative.transcribe(ctx, warm, threads, warmCtx, 1, st); // the first pass also sets things up
                 JSObject r = new JSObject();
                 r.put("model", file);
-                r.put("ms", st[0]);
+                r.put("ms", Math.min(first, st[0]));
+                r.put("firstMs", first);
                 r.put("loadMs", loadMs);
                 r.put("threads", threads);
                 r.put("cores", cores);

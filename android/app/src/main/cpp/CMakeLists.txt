@@ -75,6 +75,9 @@ endfunction()
 if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
     tilawa_collect(${whisper_SOURCE_DIR})
 endif ()
+if (TARGET parakeet)
+    set_target_properties(parakeet PROPERTIES EXCLUDE_FROM_ALL TRUE) # another speech model, not used
+endif ()
 
 add_library(tilawa_whisper SHARED tw.cpp jni.cpp)
 target_link_libraries(tilawa_whisper PRIVATE whisper ggml)

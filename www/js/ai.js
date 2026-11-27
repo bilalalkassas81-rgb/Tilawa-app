@@ -55,8 +55,8 @@ export function aiLabel() {
   return `${aiInfo.device}, ${m ? m.replace('-', ' ') : /tiny/.test(aiInfo.model) ? 'tiny' : 'base'}, ${(aiInfo.ms / 1000).toFixed(aiInfo.ms < 1000 ? 2 : 1)} s`;
 }
 // One pass of the warm-up taking longer than this: too slow to follow recitation. The web engine always hears 30 s;
-// the native one times 2 s of audio, as most phrases are a few seconds.
-const SLOW_MS = NW ? 1500 : 3000;
+// the native one times 2 s of audio (most phrases are a few seconds): slower than that falls behind the reader.
+const SLOW_MS = NW ? 2000 : 3000;
 export const aiTooSlow = () => aiInfo.ms > SLOW_MS;
 const diag = (o) => { if (typeof window === 'object' && window.__tilawaDiag) console.log('DIAG run', JSON.stringify(o)); };
 
@@ -145,7 +145,7 @@ function loadNative() {
       loadCbs.forEach((cb) => cb(msg, a / b));
     });
     loadCbs.forEach((cb) => cb('Preparing the Qur’an model…', 0));
-    const r = await NW.load({ url: REL + NM.file, file: NM.file, sha256: NM.sha256, warmCtx: ctxFor(2) });
+    const r = await NW.load({ url: REL + NM.file, file: NM.file, sha256: NM.sha256, warmCtx: ctxFor(2), threads: NATIVE.threads || 0 });
     Object.assign(aiInfo, { device: 'native', model: NM.file, ms: r.ms, threads: r.threads });
     console.log('Tilawa: Qur’an model (native):', JSON.stringify({ ...r, margin: NATIVE.margin, beam: NATIVE.beam }));
     const cbs = loadCbs; loadCbs = []; cbs.forEach((cb) => cb(null, 1, null));

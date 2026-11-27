@@ -154,7 +154,10 @@ jobs:
           script: |
             adb install -r app-debug.apk
             adb shell pm grant app.tilawa.quran android.permission.RECORD_AUDIO
+            # let the freshly booted system finish its background work (dex optimisation) before timing anything
+            for i in $(seq 1 24); do l=$(adb shell cat /proc/loadavg | cut -d' ' -f1); echo "load $l"; [ "${l%%.*}" -lt 2 ] && break; sleep 5; done
             ANDROID=1 FAKE_MIC=/diag.wav SECONDS=150 CLIPS=1 NATIVE='{"model":"${{ matrix.model }}","margin":1}' node tests/e2e/ai-browser.cjs || true
             ANDROID=1 FAKE_MIC=/diag2.wav SECONDS=150 NATIVE='{"model":"${{ matrix.model }}","margin":1}' node tests/e2e/ai-browser.cjs || true
             ANDROID=1 FAKE_MIC=/diag.wav SECONDS=150 NATIVE='{"model":"${{ matrix.model }}","margin":-1}' node tests/e2e/ai-browser.cjs || true
-            adb logcat -d -s TilawaWhisper:* AndroidRuntime:E DEBUG:* | tail -40 || true
+            ANDROID=1 FAKE_MIC=/diag.wav SECONDS=3 CLIPS=1 NATIVE='{"model":"${{ matrix.model }}","margin":1,"threads":4}' node tests/e2e/ai-browser.cjs 2>&1 | grep -E 'CLIPS|ctx|full window|Qur’an model' || true
+            adb logcat -d -s TilawaWhisper:* AndroidRuntime:E DEBUG:* | grep -v 'whisper_model_load\|whisper_init\|whisper_backend' | tail -40 || true

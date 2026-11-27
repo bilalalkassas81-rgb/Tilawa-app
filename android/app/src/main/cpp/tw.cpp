@@ -58,8 +58,9 @@ tw_result tw_transcribe(whisper_context * ctx, const float * pcm, int n, int thr
     p.greedy.best_of = 1;
     p.beam_search.beam_size = std::max(2, beam);
     p.audio_ctx = actx >= full ? 0 : actx;
-    // a model stuck repeating itself would otherwise decode up to 224 tokens; recitation is well under 10 a second
-    p.max_tokens = 24 + (int) std::ceil(sec * 12);
+    // A model stuck repeating itself would otherwise decode up to 224 tokens. The output is fully voweled (about 7
+    // tokens a word): this leaves room for fast recitation (3 words a second).
+    p.max_tokens = 24 + (int) std::ceil(sec * 20);
     // Deliberately no initial prompt with the expected verse: the model would then "hear" the right word when the
     // reader says a wrong one, hiding the very mistakes the app is there to show.
     p.initial_prompt = nullptr;
