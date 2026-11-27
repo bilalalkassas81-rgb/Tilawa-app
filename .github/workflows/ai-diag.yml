@@ -145,7 +145,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: [base-q8_0, tiny-q8_0]
+        model: [base-q8_0]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -177,14 +177,4 @@ jobs:
           script: |
             adb install -r app-debug.apk
             adb shell pm grant app.tilawa.quran android.permission.RECORD_AUDIO
-            # let the freshly booted system finish its background work (dex optimisation) before timing anything
-            for i in $(seq 1 24); do l=$(adb shell cat /proc/loadavg | cut -d' ' -f1); [ "${l%%.*}" -lt 3 ] && break; sleep 5; done; echo "load $l"
-            adb logcat -c; (adb logcat -v time '*:W' TilawaWhisper:V ActivityManager:I lowmemorykiller:V > logcat.txt 2>&1 &)
-            (while true; do echo "$(date +%T) $(free -m | awk 'NR==2{print "host used",$3,"avail",$7}') $(adb shell cat /proc/meminfo 2>/dev/null | awk '/MemAvailable/{print "guest avail",$2}')"; sleep 10; done > mem.txt 2>&1 &)
-            timeout 400 env ANDROID=1 FAKE_MIC=/diag.wav SECONDS=150 CLIPS=1 NATIVE="{\"model\":\"${{ matrix.model }}\",\"margin\":1}" node tests/e2e/ai-browser.cjs || echo "exit $?"
-            pgrep -fa qemu-system | cut -c1-80 || echo "EMULATOR GONE"
-            timeout 400 env ANDROID=1 FAKE_MIC=/diag2.wav SECONDS=150 NATIVE="{\"model\":\"${{ matrix.model }}\",\"margin\":1}" node tests/e2e/ai-browser.cjs || echo "exit $?"
-            timeout 400 env ANDROID=1 FAKE_MIC=/diag.wav SECONDS=150 NATIVE="{\"model\":\"${{ matrix.model }}\",\"margin\":-1}" node tests/e2e/ai-browser.cjs || echo "exit $?"
-            timeout 200 env ANDROID=1 FAKE_MIC=/diag.wav SECONDS=3 CLIPS=1 NATIVE="{\"model\":\"${{ matrix.model }}\",\"margin\":1,\"threads\":4}" node tests/e2e/ai-browser.cjs 2>&1 | grep -E 'CLIPS|ctx|full window|Qur’an model' || true
-            echo "--- memory"; tail -40 mem.txt; echo "--- host kernel"; sudo dmesg | tail -15
-            echo "--- logcat"; grep -v 'whisper_model_load\|whisper_init\|whisper_backend' logcat.txt | tail -80 || true
+            sh tests/e2e/android-run.sh ${{ matrix.model }}

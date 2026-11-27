@@ -41,7 +41,6 @@ set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(WHISPER_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)  # ggml's own thread pool: nothing extra to ship
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
-set(GGML_LLAMAFILE ON CACHE BOOL "" FORCE)
 
 if (ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "x86_64")
     # CPUs differ in what they can do (ARM: dot product, fp16 arithmetic, int8 matrix multiply, SVE; x86: AVX2,
@@ -50,9 +49,11 @@ if (ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "x86_64")
     set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
     set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
     set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
+    set(GGML_LLAMAFILE ON CACHE BOOL "" FORCE)
 else ()
-    # armeabi-v7a: one build with NEON (on by default in the NDK)
+    # armeabi-v7a: one build with NEON (on by default in the NDK); llamafile's kernels need 64-bit ARM fp16
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 endif ()
 
 add_subdirectory(${whisper_SOURCE_DIR} whisper)

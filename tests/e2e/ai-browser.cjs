@@ -122,6 +122,23 @@ const PKG = 'app.tilawa.quran';
     }, { fake: process.env.FAKE_MIC, margin: process.env.NATIVE ? JSON.parse(process.env.NATIVE).margin ?? 1 : 1 });
     console.log('CLIPS', JSON.stringify(clips, null, 1));
   }
+  // STRESS=<seconds>: the native engine back to back on 5 s clips, without the microphone
+  if (process.env.STRESS && process.env.FAKE_MIC) {
+    const t1 = Date.now();
+    while (Date.now() - t1 < +process.env.STRESS * 1000) {
+      const r = await page.evaluate(async (fake) => {
+        const W = window.Capacitor.Plugins.Whisper;
+        if (!window.__clip) {
+          const x = (await new OfflineAudioContext(1, 16000, 16000).decodeAudioData(await (await fetch(fake)).arrayBuffer())).getChannelData(0).subarray(3 * 16000, 8 * 16000);
+          const b = new Uint8Array(x.length * 2), v = new DataView(b.buffer); x.forEach((f, i) => v.setInt16(i * 2, f * 32767, true));
+          let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+          window.__clip = btoa(s);
+        }
+        return W.transcribe({ audio: window.__clip, audioCtx: 300, beam: 1 });
+      }, process.env.FAKE_MIC);
+      console.log(ts(), 'STRESS', r.ms, 'ms', r.text);
+    }
+  }
 
   // Recite Al-Fatiha
   await tap('nav [data-go="read"]');
